@@ -331,9 +331,9 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     return;
   }
 
-  const llmBase = (process.env.LLM_API_URL || "").replace(/\/+$/, "");
-  const llmKey = process.env.LLM_API_KEY || "";
-  if (!llmBase || !llmKey) {
+  const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
+  const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
+  if (!llmKey) {
     sendJson(res, 500, { error: "LLM not configured on server" });
     return;
   }
@@ -406,6 +406,7 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${llmKey}` },
       body: JSON.stringify({
+        model: "grok-4.3",
         messages: msgs,
         tools: JARVIS_TOOLS,
         tool_choice: "auto",
@@ -520,6 +521,7 @@ async function streamLlmRound(
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${llmKey}` },
     body: JSON.stringify({
+      model: "grok-4.3",
       messages: msgs,
       tools: JARVIS_TOOLS,
       tool_choice: "auto",
@@ -593,9 +595,9 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     sendJson(res, 405, { error: "Method not allowed" });
     return;
   }
-  const llmBase = (process.env.LLM_API_URL || "").replace(/\/+$/, "");
-  const llmKey = process.env.LLM_API_KEY || "";
-  if (!llmBase || !llmKey) {
+  const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
+  const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
+  if (!llmKey) {
     sendJson(res, 500, { error: "LLM not configured on server" });
     return;
   }
