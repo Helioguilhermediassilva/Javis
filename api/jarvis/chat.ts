@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { handleJarvisChat } from "../../server/jarvisProxy.js";
+import { handleJarvisChat } from "../../server/jarvisProxy";
 
 export const config = { maxDuration: 60 };
 
