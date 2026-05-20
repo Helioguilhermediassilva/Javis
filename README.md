@@ -30,7 +30,8 @@ A aplicação é um *single-page* React 19 servido como estático, com funções
 |---|---|---|
 | Frontend | React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui | HUD, painéis, captura de microfone, *streaming* de áudio |
 | Backend serverless | TypeScript em `api/*.ts` (Vercel Functions, Node 20) | Proxy para CKAN, Grok e ElevenLabs; orquestração de *tool calling* |
-| LLM | Grok da xAI (`grok-4.20-0309-non-reasoning`) via Responses API | Diálogo, *tool calling*, tratamento de gênero |
+| LLM (chat principal) | Grok da xAI — `grok-4.3` via Chat Completions API | Diálogo, *tool calling*, tratamento de gênero |
+| LLM (sentimento social) | Grok da xAI — `grok-4.20-0309-non-reasoning` via Responses API | Briefing do X em tempo real com tool nativa `x_search` |
 | Voz (síntese) | ElevenLabs — voz clonada *Hélio Guilherme* (`F1W6zKJWyDQD3yKJc4A6`) | TTS MP3 *streaming* + cache IndexedDB |
 | Voz (reconhecimento) | Web Speech API nativa do Chrome/Edge | STT contínuo, sem dependência de SDK externo |
 | Dados oficiais | CKAN do portal `dados.df.gov.br` | Datasets do GDF (saúde, segurança, educação, transporte, transparência) |
@@ -71,19 +72,24 @@ A *tool* `sentimento_social_df` separa o que o Grok devolve em três blocos estr
 
 ## Modelo de IA — Grok da xAI
 
+O JARVIS opera com **dois modelos do Grok** em paralelo, cada um otimizado para o seu papel:
+
+| Papel | Modelo | Endpoint | Por quê |
+|---|---|---|---|
+| Chat principal e *tool calling* | `grok-4.3` | `POST https://api.x.ai/v1/chat/completions` | Modelo *flagship* atual da xAI (após a retirada de `grok-3`/`grok-4` em maio de 2026). Suporta `tool_choice: auto` e *streaming* SSE, essenciais para a orquestração das tools customizadas `buscar_dados_df` e `sentimento_social_df`. |
+| Sentimento social | `grok-4.20-0309-non-reasoning` | `POST https://api.x.ai/v1/responses` | Combina a tool nativa `x_search` da Responses API com modo *non-reasoning*. Responde em 3 a 5 s — contra 17 a 22 s do modo *reasoning* — sem perda perceptível de qualidade para um briefing operacional. |
+
+Parâmetros comuns:
+
 | Parâmetro | Valor |
 |---|---|
-| Modelo de produção | `grok-4.20-0309-non-reasoning` |
-| Endpoint | `POST https://api.x.ai/v1/responses` |
 | *Tools* nativas | `x_search` (X em tempo real, `from_date` últimos 3 dias) |
 | *Tools* customizadas | `buscar_dados_df` (CKAN do GDF), `sentimento_social_df` (sentimento agregado do X) |
 | Janela de contexto | até 256k tokens |
 | Idioma de resposta | Português brasileiro (forçado no *system prompt*) |
 | Tratamento | Senhor / Senhora (escolhido pelo usuário, injetado como segunda *system message*) |
 
-A escolha do modelo *non-reasoning* foi deliberada. A versão *reasoning* (`grok-4.3`) leva entre 17 e 22 segundos para construir uma resposta com *tool calling*; a versão *non-reasoning* responde em 3 a 5 segundos com qualidade equivalente para o caso de uso operacional, em que a clareza e a velocidade pesam mais do que cadeias de raciocínio elaboradas.
-
-A chave da xAI fica como variável de ambiente `XAI_API_KEY` (apenas no servidor — nunca exposta ao cliente).
+A mesma chave `XAI_API_KEY` autentica **os dois usos** — não há necessidade de cadastrar credenciais separadas. A chave fica como variável de ambiente apenas no servidor; nunca é exposta ao cliente.
 
 ---
 
@@ -108,6 +114,7 @@ A chave da ElevenLabs fica como `ELEVENLABS_API_KEY`. O *cache de áudio TTS* (m
 | **Versão 0.7 (cache de áudio TTS)** | IndexedDB com LRU de 60 entradas para frases curtas; áudio repetido toca sem TTFB |
 | **Versão 0.8 (wake-word + tratamento)** | Modo opcional “Ei JARVIS” para ativação por voz; preferência de tratamento Senhor/Senhora persistida em `localStorage` e propagada ao LLM |
 | **Versão 1.0** | Pré-busca paralela de *tools* para *briefings* combinados (1 rodada única em vez de 2); briefing combinado a frio em ~11 s; suíte de testes Vitest cobrindo `wakeWord`, `briefingIntent`, `ttsAudioCache`, `jarvisChatStream`, integração com CKAN, ElevenLabs e xAI |
+| **Versão 1.0.1 (deploy Vercel)** | Sanitização completa do código (autoria NowGo AI, sem referências a outros projetos), opção *Neutro* removida do *SetupOverlay* (apenas Senhor/Senhora), 7 funções serverless em `api/`, `vercel.json` configurado, README em pt-BR. Unificação da credencial: `XAI_API_KEY` passou a cobrir tanto o chat principal (modelo `grok-4.3`) quanto o sentimento social, eliminando a necessidade de variáveis duplicadas no Vercel. |
 
 Linhas de comentário, *system prompt* e branding inteiros foram revisados para refletir a autoria **NowGo AI** — a versão pública do código não contém referências a outros nomes de projeto.
 
@@ -156,10 +163,12 @@ Todas confidenciais — devem ser cadastradas no painel do Vercel (em *Project S
 
 | Nome | Onde é usada | Obrigatória? |
 |---|---|---|
-| `XAI_API_KEY` | Servidor — chamadas ao Grok (Responses API + `x_search`) | **Sim** |
+| `XAI_API_KEY` | Servidor — chamadas ao Grok, **tanto no chat principal (`grok-4.3` via Chat Completions) quanto no sentimento social (`grok-4.20-0309-non-reasoning` via Responses + `x_search`)** | **Sim** |
 | `ELEVENLABS_API_KEY` | Servidor — *streaming* TTS da voz clonada | **Sim** |
-| `LLM_API_URL` | Servidor — base URL alternativa para um *gateway* de LLM próprio (opcional; quando ausente, o JARVIS chama a xAI diretamente) | Não |
-| `LLM_API_KEY` | Servidor — chave do *gateway* citado acima | Não |
+| `LLM_API_URL` | Servidor — base URL alternativa para um *gateway* de LLM próprio. Quando ausente, o JARVIS chama `https://api.x.ai` diretamente | Não |
+| `LLM_API_KEY` | Servidor — chave do *gateway* citado acima. Quando ausente, o JARVIS reaproveita automaticamente `XAI_API_KEY` | Não |
+
+> Em produção, o JARVIS funciona com **apenas duas variáveis**: `XAI_API_KEY` e `ELEVENLABS_API_KEY`. O par `LLM_API_URL` / `LLM_API_KEY` só é útil para quem quiser intermediar o tráfego do Grok por um *gateway* corporativo ou cache externo.
 
 ---
 
