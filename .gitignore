@@ -1,0 +1,44 @@
+# Dependências
+node_modules
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+
+# Vercel
+.vercel
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# SO
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Coverage
+coverage/
+*.lcov
+
+# Cache TS / Vite
+*.tsbuildinfo
+.cache
+.parcel-cache
+
+# Temp
+tmp/
+temp/

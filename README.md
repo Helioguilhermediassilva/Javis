@@ -1,0 +1,204 @@
+# JARVIS — Assistente Operacional do Distrito Federal
+
+> **Just A Rather Very Intelligent System.** Uma interface conversacional, com voz clonada e HUD em estética *heads-up display*, que fala português brasileiro, lê dados abertos do Distrito Federal em tempo real e escuta o que está sendo dito sobre a cidade no X (antigo Twitter).
+
+**Autoria e desenvolvimento:** [NowGo AI](https://nowgo.ai)
+**Licença:** Proprietário — todos os direitos reservados à NowGo AI.
+
+---
+
+## Visão geral
+
+O JARVIS é um cockpit conversacional pensado para tomadores de decisão do Distrito Federal — em particular o Palácio do Buriti, secretarias e gabinetes parlamentares — que precisam de respostas rápidas, fundamentadas em dados oficiais, sobre o que está acontecendo na cidade. O usuário fala (ou digita) em português brasileiro, o sistema entende a intenção, consulta as bases conectadas, agrega o que está sendo dito nas redes sobre o tema e responde em voz natural enquanto a interface ainda está renderizando o texto.
+
+Quatro elementos estruturais sustentam o produto:
+
+1. **Voz clonada de alta fidelidade**, gerada pela [ElevenLabs](https://elevenlabs.io/), reproduzida via *streaming* de áudio MP3 e cacheada em IndexedDB para frases curtas frequentes (latência percebida próxima de zero em respostas como “Sim, senhor.”).
+2. **Reconhecimento de fala contínuo** com modo opcional de *wake-word* (“Ei JARVIS”), construído sobre a Web Speech API do navegador e tolerante a variações de transcrição (“jarves”, “jarvez”, “hey jarvis”).
+3. **Pipeline duplo de dados**: um lado consulta o portal oficial **dados.df.gov.br** (CKAN); outro lado consulta o **X em tempo real** através do **Grok da xAI** com a ferramenta server-side `x_search`. O servidor decide qual lado acionar — ou ambos em paralelo — conforme o tipo de pergunta.
+4. **HUD em vermelho/âmbar/ciano** inspirado em interfaces de cockpit, com painel central de diálogo, painel lateral de *Briefing Social DF* e relógio de Brasília.
+
+A pessoa que utiliza o sistema escolhe na inicialização como deseja ser tratada — **Senhor** ou **Senhora** — e essa preferência viaja em todas as chamadas ao modelo, garantindo concordância de gênero coerente em todas as respostas.
+
+---
+
+## Arquitetura
+
+A aplicação é um *single-page* React 19 servido como estático, com funções *serverless* expostas em `/api/*`. Tudo compila no Vercel sem servidor dedicado.
+
+| Camada | Tecnologia | Função |
+|---|---|---|
+| Frontend | React 19 + TypeScript + Vite 7 + Tailwind 4 + shadcn/ui | HUD, painéis, captura de microfone, *streaming* de áudio |
+| Backend serverless | TypeScript em `api/*.ts` (Vercel Functions, Node 20) | Proxy para CKAN, Grok e ElevenLabs; orquestração de *tool calling* |
+| LLM | Grok da xAI (`grok-4.20-0309-non-reasoning`) via Responses API | Diálogo, *tool calling*, tratamento de gênero |
+| Voz (síntese) | ElevenLabs — voz clonada *Hélio Guilherme* (`F1W6zKJWyDQD3yKJc4A6`) | TTS MP3 *streaming* + cache IndexedDB |
+| Voz (reconhecimento) | Web Speech API nativa do Chrome/Edge | STT contínuo, sem dependência de SDK externo |
+| Dados oficiais | CKAN do portal `dados.df.gov.br` | Datasets do GDF (saúde, segurança, educação, transporte, transparência) |
+| Sentimento social | API `live_search` do Grok (tool `x_search`) | Reclamações e elogios do X sobre Brasília, últimos 3 dias |
+
+O fluxo de uma pergunta como *“Faça um briefing de saúde no DF”*:
+
+1. O navegador captura a fala, transcreve via Web Speech API e envia o texto ao endpoint **`/api/jarvis/chat/stream`**.
+2. Antes de invocar o modelo, o servidor roda `detectBriefingIntent`. Se o pedido casa um padrão de *briefing* + um dos cinco tópicos suportados, o servidor dispara em paralelo (`Promise.all`) as duas *tools* — `buscar_dados_df` (CKAN) e `sentimento_social_df` (Grok) — e injeta os resultados como uma segunda mensagem `system` antes de chamar o LLM. Isso elimina rodadas extras de *tool calling* e corta a latência aproximadamente pela metade.
+3. O modelo responde já com tudo em mãos. A resposta é retransmitida em SSE como uma sequência de `delta`, `tool_start`, `tool_end` e `done` para o frontend, que atualiza o log incrementalmente — primeiro *byte* visível em torno de **400 ms**.
+4. Quando o modelo finaliza, o frontend pede o áudio em `/api/jarvis/tts`. Frases curtas previamente vistas tocam direto do IndexedDB; frases novas tocam via `MediaSource` com latência mínima.
+
+---
+
+## Bases de dados conectadas
+
+### CKAN — `dados.df.gov.br`
+
+O **portal oficial de dados abertos do Distrito Federal** é a única fonte estatística reconhecida pelo JARVIS para questões factuais sobre o GDF. Cinco grupos do CKAN estão pré-mapeados como tópicos de primeira classe na heurística de intenção e na *tool* `buscar_dados_df`:
+
+| Tópico | Grupo CKAN | Cobertura típica |
+|---|---|---|
+| Saúde | `saude` | Atendimentos da SES-DF, leitos, vigilância epidemiológica |
+| Segurança | `seguranca` | Boletins da PCDF, ocorrências da PMDF, dados do CIODF |
+| Educação | `educacao` | Matrículas, IDEB regional, infraestrutura escolar |
+| Transporte | `transporte` | DFTrans, BRT/Metrô, frota, estatísticas de mobilidade |
+| Transparência | `transparencia` | Execução orçamentária, contratos, servidores |
+
+A *tool* `buscar_dados_df` consulta o endpoint `package_search` do CKAN, devolvendo metadados, descrição, periodicidade e *recursos* (links de download em CSV, JSON, XLSX). O JARVIS retorna ao usuário uma síntese verbal e indica explicitamente os datasets que sustentam a afirmação, evitando alucinações: nada é dito como “fato oficial” sem rastreabilidade.
+
+### X (antigo Twitter) — via Grok
+
+O JARVIS não fala com o X diretamente; **toda inteligência social vem do Grok**. A ferramenta `x_search` é uma capacidade *server-side* nativa da Responses API da xAI: o modelo recebe permissão para consultar postagens do X dentro de uma janela temporal e devolve, na própria resposta, um resumo já analisado pelo Grok. O JARVIS configura essa janela para **os últimos 3 dias** (`from_date` dinâmico) — três dias é suficiente para captar o pulso do momento sem deixar o modelo trabalhar com material velho.
+
+A *tool* `sentimento_social_df` separa o que o Grok devolve em três blocos estruturados — **reclamações**, **elogios** e **mentions emergentes** — e cacheia o resultado por chave normalizada (sem acentos, sem *stopwords* portuguesas, tópico ordenado). Isso significa que “saúde no DF”, “Saúde no Distrito Federal” e “saude DF” caem todos no mesmo *bucket* de cache, com TTL de poucos minutos.
+
+---
+
+## Modelo de IA — Grok da xAI
+
+| Parâmetro | Valor |
+|---|---|
+| Modelo de produção | `grok-4.20-0309-non-reasoning` |
+| Endpoint | `POST https://api.x.ai/v1/responses` |
+| *Tools* nativas | `x_search` (X em tempo real, `from_date` últimos 3 dias) |
+| *Tools* customizadas | `buscar_dados_df` (CKAN do GDF), `sentimento_social_df` (sentimento agregado do X) |
+| Janela de contexto | até 256k tokens |
+| Idioma de resposta | Português brasileiro (forçado no *system prompt*) |
+| Tratamento | Senhor / Senhora (escolhido pelo usuário, injetado como segunda *system message*) |
+
+A escolha do modelo *non-reasoning* foi deliberada. A versão *reasoning* (`grok-4.3`) leva entre 17 e 22 segundos para construir uma resposta com *tool calling*; a versão *non-reasoning* responde em 3 a 5 segundos com qualidade equivalente para o caso de uso operacional, em que a clareza e a velocidade pesam mais do que cadeias de raciocínio elaboradas.
+
+A chave da xAI fica como variável de ambiente `XAI_API_KEY` (apenas no servidor — nunca exposta ao cliente).
+
+---
+
+## Voz — ElevenLabs
+
+A voz do JARVIS foi clonada a partir do timbre de **Hélio Guilherme** com a ferramenta de *Voice Cloning* da ElevenLabs e reside no ID `F1W6zKJWyDQD3yKJc4A6`. O servidor faz proxy entre o frontend e o endpoint `text-to-speech/{voiceId}/stream`, devolvendo um *stream* de MP3 que o frontend toca via `MediaSource` para reduzir o *time-to-first-byte* sonoro.
+
+A chave da ElevenLabs fica como `ELEVENLABS_API_KEY`. O *cache de áudio TTS* (módulo `client/src/lib/ttsAudioCache.ts`) persiste localmente até 60 frases curtas (até 80 caracteres cada), indexadas por SHA-256 do texto normalizado + voice ID. Em uso real isso elimina completamente a latência de frases recorrentes do mordomo (“Sim, senhor.”, “Compreendido.”, “Imediatamente.”, “Pois não, senhora.”).
+
+---
+
+## Linha do tempo do desenvolvimento
+
+| Marco | Entrega |
+|---|---|
+| **Versão 0.1** | Esqueleto React + HUD em ciano, captura de microfone, integração inicial com Grok via *Chat Completions* |
+| **Versão 0.2** | Voz clonada na ElevenLabs e integrada via *streaming* MP3 + `MediaSource` |
+| **Versão 0.3** | *Tool calling* customizado: `buscar_dados_df` ligada ao CKAN do GDF; primeiros painéis laterais com datasets reais |
+| **Versão 0.4** | *Tool* `sentimento_social_df` com `x_search` da xAI; painel **Briefing Social DF** mostrando reclamações e elogios reais |
+| **Versão 0.5 (otimização do Grok)** | Migração de `grok-4.3` (*reasoning*) para `grok-4.20-0309-non-reasoning`; `from_date` dinâmico nos últimos 3 dias; latência de briefing combinado caiu de 22-32 s para ~14 s |
+| **Versão 0.6 (cache e SSE)** | Cache compartilhado de sentimento entre painel direto e *tool* do JARVIS, com chave normalizada (acentos, *stopwords*, ordem); endpoint `/api/jarvis/chat/stream` com SSE entregando *deltas* em ~400 ms |
+| **Versão 0.7 (cache de áudio TTS)** | IndexedDB com LRU de 60 entradas para frases curtas; áudio repetido toca sem TTFB |
+| **Versão 0.8 (wake-word + tratamento)** | Modo opcional “Ei JARVIS” para ativação por voz; preferência de tratamento Senhor/Senhora persistida em `localStorage` e propagada ao LLM |
+| **Versão 1.0** | Pré-busca paralela de *tools* para *briefings* combinados (1 rodada única em vez de 2); briefing combinado a frio em ~11 s; suíte de testes Vitest cobrindo `wakeWord`, `briefingIntent`, `ttsAudioCache`, `jarvisChatStream`, integração com CKAN, ElevenLabs e xAI |
+
+Linhas de comentário, *system prompt* e branding inteiros foram revisados para refletir a autoria **NowGo AI** — a versão pública do código não contém referências a outros nomes de projeto.
+
+---
+
+## Estrutura de pastas
+
+```
+.
+├── api/                      # Funções serverless do Vercel
+│   ├── jarvis/
+│   │   ├── chat.ts           # POST /api/jarvis/chat       (resposta única)
+│   │   ├── chat/stream.ts    # POST /api/jarvis/chat/stream (SSE)
+│   │   └── tts.ts            # POST /api/jarvis/tts        (proxy ElevenLabs)
+│   ├── df/
+│   │   ├── topics.ts         # GET  /api/df/topics
+│   │   ├── search.ts         # GET  /api/df/search
+│   │   └── dataset.ts        # GET  /api/df/dataset
+│   └── grok/
+│       └── sentiment.ts      # POST /api/grok/sentiment
+├── client/                   # Aplicação React (Vite)
+│   ├── index.html
+│   └── src/
+│       ├── components/       # SetupOverlay, painéis, HUD shell
+│       ├── hooks/            # useElevenLabsTTS, useSpeechRecognition
+│       ├── lib/              # jarvisLLM, ttsAudioCache, wakeWord
+│       └── pages/Home.tsx    # Cockpit principal
+├── server/                   # Handlers Node compartilhados (importados pelas funções)
+│   ├── jarvisProxy.ts        # /api/jarvis/* — chat, stream, tts, system prompt
+│   ├── grokProxy.ts          # /api/grok/sentiment + cache compartilhado
+│   ├── dfDataProxy.ts        # /api/df/*    — CKAN do GDF
+│   ├── dfSources.ts          # Constantes dos grupos CKAN suportados
+│   └── *.test.ts             # Suíte Vitest (unitária e de integração)
+├── shared/                   # Tipos compartilhados client/server
+├── vercel.json               # Build, rewrites SPA, framework=null
+├── vite.config.ts            # Build do frontend + proxy /api em dev
+├── vitest.config.ts          # Ambientes node/happy-dom por glob
+└── package.json
+```
+
+---
+
+## Variáveis de ambiente
+
+Todas confidenciais — devem ser cadastradas no painel do Vercel (em *Project Settings → Environment Variables*) e nunca *commitadas*.
+
+| Nome | Onde é usada | Obrigatória? |
+|---|---|---|
+| `XAI_API_KEY` | Servidor — chamadas ao Grok (Responses API + `x_search`) | **Sim** |
+| `ELEVENLABS_API_KEY` | Servidor — *streaming* TTS da voz clonada | **Sim** |
+| `LLM_API_URL` | Servidor — base URL alternativa para um *gateway* de LLM próprio (opcional; quando ausente, o JARVIS chama a xAI diretamente) | Não |
+| `LLM_API_KEY` | Servidor — chave do *gateway* citado acima | Não |
+
+---
+
+## Como rodar localmente
+
+Pré-requisitos: Node 20+, pnpm 10+.
+
+```bash
+pnpm install
+cp .env.example .env.local      # preencher XAI_API_KEY e ELEVENLABS_API_KEY
+pnpm dev                        # http://localhost:5173
+```
+
+Em desenvolvimento, o `vite.config.ts` faz *proxy* das rotas `/api/*` para handlers in-process — não é necessário rodar um servidor Express separado. O hot-reload funciona normalmente para frontend e *handlers*.
+
+Para rodar a suíte de testes:
+
+```bash
+pnpm test         # unitários + integração (CKAN, xAI, ElevenLabs)
+pnpm check        # tsc --noEmit (apenas types)
+pnpm build        # build de produção em ./dist
+```
+
+---
+
+## Como publicar no Vercel
+
+1. **Importe o repositório** em <https://vercel.com/new> escolhendo `Helioguilhermediassilva/Javis`.
+2. Em *Build & Development Settings*, deixe que o Vercel detecte o `vercel.json` automaticamente. O `buildCommand` é `pnpm build`, o `outputDirectory` é `dist`, e a *Framework Preset* deve ficar como **Other**.
+3. Em *Environment Variables*, cadastre `XAI_API_KEY` e `ELEVENLABS_API_KEY` (escolha *Production* e *Preview*).
+4. Clique em **Deploy**. O Vercel publicará o frontend como estático e cada arquivo dentro de `api/` como uma função *serverless* Node 20.
+5. Para domínio próprio (ex.: `jarvis.nowgo.ai`), use o painel *Domains* do projeto. O Vercel cuida do certificado TLS automaticamente.
+
+> **Limites importantes do plano gratuito:** funções *serverless* têm execução máxima de 60 s no plano Hobby. As rotas pesadas (`/api/jarvis/chat`, `/api/jarvis/chat/stream`, `/api/jarvis/tts`, `/api/grok/sentiment`) já estão configuradas com `maxDuration: 60`, suficiente para *briefings* combinados em condições normais. Em produção sob carga, recomendamos o plano Pro ou um *gateway* dedicado.
+
+---
+
+## Notas finais
+
+Este projeto foi concebido, prototipado e codificado pela **NowGo AI**. A personalidade do assistente — incluindo o nome J.A.R.V.I.S., o tom mordomístico e a estética HUD — é uma referência cultural ao universo *Homem de Ferro*; nenhum direito autoral é reivindicado sobre essa inspiração. Todo o código de aplicação, prompts, integrações e *bindings* com APIs públicas é de autoria da NowGo AI.
+
+Para questões comerciais, parcerias com governos e secretarias, ou licenciamento, contate a equipe da NowGo AI.
