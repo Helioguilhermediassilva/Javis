@@ -2,7 +2,6 @@
   "name": "jarvis-df",
   "version": "1.0.0",
   "description": "JARVIS — Assistente operacional do Distrito Federal. Briefings em tempo real combinando bases públicas (CKAN dados.df.gov.br) com sentimento social (Grok / xAI x_search).",
-  "type": "module",
   "license": "MIT",
   "author": "NowGo AI",
   "homepage": "https://github.com/Helioguilhermediassilva/Javis",
