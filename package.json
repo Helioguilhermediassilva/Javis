@@ -87,5 +87,11 @@
     "typescript": "5.6.3",
     "vite": "^7.1.7",
     "vitest": "^2.1.4"
-  }
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "type": "module"
 }

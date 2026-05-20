@@ -2,7 +2,7 @@
 // Used both by the Vite dev middleware and by the Express production server.
 
 import type { IncomingMessage, ServerResponse } from "http";
-import { getCachedSentiment, setCachedSentiment } from "./grokProxy";
+import { getCachedSentiment, setCachedSentiment } from "./grokProxy.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o J.A.R.V.I.S. (Just A Rather Very Intelligent System), assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 

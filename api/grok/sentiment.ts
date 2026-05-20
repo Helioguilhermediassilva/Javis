@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { handleGrokSentiment } from "../../server/grokProxy";
+import { handleGrokSentiment } from "../../server/grokProxy.js";
 
 export const config = { maxDuration: 60 };
 

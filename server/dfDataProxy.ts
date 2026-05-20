@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import { DF_CKAN_BASE, DF_TOPICS, type DfGroupSlug } from "./dfSources";
+import { DF_CKAN_BASE, DF_TOPICS, type DfGroupSlug } from "./dfSources.js";
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = JSON.stringify(payload);
