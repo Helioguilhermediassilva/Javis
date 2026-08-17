@@ -93,7 +93,7 @@ A mesma chave `XAI_API_KEY` autentica **os dois usos** — não há necessidade 
 
 ---
 
-## Voz — ElevenLabs
+## Voz 
 
 A voz do JARVIS foi clonada a partir do timbre de **Hélio Guilherme** com a ferramenta de *Voice Cloning* da ElevenLabs e reside no ID `F1W6zKJWyDQD3yKJc4A6`. O servidor faz proxy entre o frontend e o endpoint `text-to-speech/{voiceId}/stream`, devolvendo um *stream* de MP3 que o frontend toca via `MediaSource` para reduzir o *time-to-first-byte* sonoro.
 
