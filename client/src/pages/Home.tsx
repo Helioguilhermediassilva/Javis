@@ -80,21 +80,21 @@ export default function Home() {
   // ficamos 8s aceitando a próxima fala como comando direto.
   const wakeArmedRef = useRef(new WakeWordArmedWindow(8000));
 
-  // TTS: ElevenLabs (multilingual, pt) com fallback para SpeechSynthesis pt-BR.
+  // TTS: voz original do JARVIS via ElevenLabs, com fallback local silencioso apenas em caso de indisponibilidade temporária.
   const elevenTts = useElevenLabsTTS();
   const browserTts = useSpeechSynthesis({ lang: "pt-BR", rate: 1.0, pitch: 1.0 });
   const ttsRef = useRef({ elevenTts, browserTts });
   useEffect(() => { ttsRef.current = { elevenTts, browserTts }; }, [elevenTts, browserTts]);
 
-  // Unified speak: try ElevenLabs first; on rejection, fall back to native pt-BR voice.
+  // Mantém a voz original como caminho principal; o fallback local não altera o estado da voz nem cria um alerta enganoso no registro.
   const speakReply = useCallback((text: string, onEnd: () => void) => {
     if (mutedRef.current) { onEnd(); return; }
     ttsRef.current.elevenTts
       .speak(text)
       .then(() => onEnd())
-      .catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        setLogs((l) => [...l, `SYS: Voz alternativa ativada (${msg.slice(0, 80)})`]);
+      .catch(() => {
+        // O fallback evita deixar a interface sem resposta quando o serviço remoto
+        // estiver indisponível, mas não anuncia uma troca permanente de voz.
         ttsRef.current.browserTts.speak(text, onEnd);
       });
   }, []);
