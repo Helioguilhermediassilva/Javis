@@ -13,7 +13,7 @@ O JARVIS é um cockpit conversacional pensado para tomadores de decisão do Dist
 
 Quatro elementos estruturais sustentam o produto:
 
-1. **Voz clonada de alta fidelidade**, gerada pela [ElevenLabs](https://elevenlabs.io/), reproduzida via *streaming* de áudio MP3 e cacheada em IndexedDB para frases curtas frequentes (latência percebida próxima de zero em respostas como “Sim, senhor.”).
+1. **Voz clonada de alta fidelidade**,reproduzida via *streaming* de áudio MP3 e cacheada em IndexedDB para frases curtas frequentes (latência percebida próxima de zero em respostas como “Sim, senhor.”).
 2. **Reconhecimento de fala contínuo** com modo opcional de *wake-word* (“Ei JARVIS”), construído sobre a Web Speech API do navegador e tolerante a variações de transcrição (“jarves”, “jarvez”, “hey jarvis”).
 3. **Pipeline duplo de dados**: um lado consulta o portal oficial **dados.df.gov.br** (CKAN); outro lado consulta o **X em tempo real** através do **Grok da xAI** com a ferramenta server-side `x_search`. O servidor decide qual lado acionar — ou ambos em paralelo — conforme o tipo de pergunta.
 4. **HUD em vermelho/âmbar/ciano** inspirado em interfaces de cockpit, com painel central de diálogo, painel lateral de *Briefing Social DF* e relógio de Brasília.
