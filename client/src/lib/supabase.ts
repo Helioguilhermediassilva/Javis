@@ -6,8 +6,9 @@ const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 
 export const supabase: SupabaseClient | null = supabasePublishableKey
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
-        // A sessão permanece apenas enquanto a aba estiver aberta; cada nova abertura exige login.
-        persistSession: false,
+        // O armazenamento permite renovar o access token durante a navegação interna.
+        // O AuthProvider limpa a sessão anterior no boot para exigir novo login ao abrir o site.
+        persistSession: true,
         autoRefreshToken: true,
         // O link de confirmação apenas confirma o e-mail; não abre o cockpit automaticamente.
         detectSessionInUrl: false,
