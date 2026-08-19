@@ -95,7 +95,7 @@ A mesma chave `XAI_API_KEY` autentica **os dois usos** — não há necessidade 
 
 ## Voz 
 
-A voz do JARVIS foi clonada a partir do timbre de **Hélio Guilherme** com a ferramenta de *Voice Cloning* da ElevenLabs e reside no ID `F1W6zKJWyDQD3yKJc4A6`. O servidor faz proxy entre o frontend e o endpoint `text-to-speech/{voiceId}/stream`, devolvendo um *stream* de MP3 que o frontend toca via `MediaSource` para reduzir o *time-to-first-byte* sonoro.
+A voz do XAVIER foi clonada a partir do timbre de **Hélio Guilherme** com a ferramenta de *Voice Cloning* da ElevenLabs e reside no ID `F1W6zKJWyDQD3yKJc4A6`. O servidor faz proxy entre o frontend e o endpoint `text-to-speech/{voiceId}/stream`, devolvendo um *stream* de MP3 que o frontend toca via `MediaSource` para reduzir o *time-to-first-byte* sonoro.
 
 A chave da ElevenLabs fica como `ELEVENLABS_API_KEY`. O *cache de áudio TTS* (módulo `client/src/lib/ttsAudioCache.ts`) persiste localmente até 60 frases curtas (até 80 caracteres cada), indexadas por SHA-256 do texto normalizado + voice ID. Em uso real isso elimina completamente a latência de frases recorrentes do mordomo (“Sim, senhor.”, “Compreendido.”, “Imediatamente.”, “Pois não, senhora.”).
 
