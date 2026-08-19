@@ -1,4 +1,12 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
+import { applySupabaseAdminHeaders } from "./supabaseAdmin";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const WEBHOOK_BASE_URL = (process.env.XAVIER_TELEGRAM_WEBHOOK_BASE_URL || "https://jarvisnowgo.com/api/telegram/webhook").replace(/\/+$/, "");
@@ -34,12 +42,6 @@ interface TelegramBot {
   username?: string;
 }
 
-function getSupabaseKey(): string {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "";
-  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY não configurada");
-  return key;
-}
-
 function getEncryptionKey(): Buffer {
   const secret = process.env.XAVIER_ENCRYPTION_KEY || "";
   if (!secret) throw new Error("XAVIER_ENCRYPTION_KEY não configurada");
@@ -67,13 +69,11 @@ function hashWebhookSecret(secret: string): string {
 }
 
 async function supabaseRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  const key = getSupabaseKey();
-  const headers = new Headers(init.headers);
-  headers.set("apikey", key);
-  headers.set("Authorization", `Bearer ${key}`);
-  headers.set("Content-Type", "application/json");
-  headers.set("Accept", "application/json");
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...init, headers, signal: AbortSignal.timeout(8_000) });
+  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...init,
+    headers: applySupabaseAdminHeaders(init),
+    signal: AbortSignal.timeout(8_000),
+  });
 }
 
 async function rows<T>(response: Response, label: string): Promise<T[]> {

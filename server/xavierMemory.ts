@@ -1,3 +1,5 @@
+import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+
 export type XavierChannel = "web" | "telegram";
 export type XavierRole = "user" | "assistant" | "system";
 
@@ -45,22 +47,10 @@ const CONVERSATION_TABLE = "xavier_conversations";
 const MESSAGE_TABLE = "xavier_messages";
 const SUMMARY_TABLE = "xavier_memory_summaries";
 
-function getSupabaseKey(): string {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "";
-  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY não configurada");
-  return key;
-}
-
 async function supabaseRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  const key = getSupabaseKey();
-  const headers = new Headers(init.headers);
-  headers.set("apikey", key);
-  headers.set("Authorization", `Bearer ${key}`);
-  headers.set("Content-Type", "application/json");
-  headers.set("Accept", "application/json");
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
-    headers,
+    headers: applySupabaseAdminHeaders(init),
     signal: AbortSignal.timeout(8_000),
   });
 }

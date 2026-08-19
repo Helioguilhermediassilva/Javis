@@ -3,21 +3,18 @@ export interface TelegramHistoryItem {
   content: string;
 }
 
+import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
+
 const TABLE = "xavier_telegram_messages";
 
-function getSupabaseKey(): string {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "";
-  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY não configurada");
-  return key;
-}
-
 async function supabaseRequest(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  headers.set("apikey", getSupabaseKey());
-  headers.set("Authorization", `Bearer ${getSupabaseKey()}`);
-  headers.set("Content-Type", "application/json");
-  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...init, headers, signal: AbortSignal.timeout(8_000) });
+  return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...init,
+    headers: applySupabaseAdminHeaders(init),
+    signal: AbortSignal.timeout(8_000),
+  });
 }
 
 export async function loadTelegramHistory(chatId: string, limit = 20): Promise<TelegramHistoryItem[]> {
