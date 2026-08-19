@@ -33,3 +33,7 @@ Fonte de verificação: https://vercel.com/nowgo/javis/deployments
 Os logs do Vercel para `/api/telegram/webhook` mostram HTTP 500 em requisições GET e POST. A causa comum a texto e áudio é o carregamento do `pptxgenjs`: o runtime Node serverless tenta executar `dist/pptxgen.es.js` como CommonJS e falha com `SyntaxError: Cannot use import statement outside a module`. Como `xavierPresentation.ts` era importado no topo do webhook, o erro acontecia antes de qualquer diferenciação entre texto e áudio.
 
 Fonte de verificação: https://vercel.com/nowgo/javis/logs
+
+A página de deployments verificou que o commit `4ce0ccf` está em `Building` no momento da consulta, com alias `https://javis-4qexumcke-nowgo.vercel.app`; os deployments anteriores permanecem `Ready`. O build deve concluir antes do teste final do domínio principal.
+
+A consulta seguinte confirmou o deployment `4ce0ccf` como `Ready`, associado ao alias `https://javis-4qexumcke-nowgo.vercel.app` e à branch `main`. O erro de carregamento do `pptxgenjs` foi corrigido antes da publicação.
