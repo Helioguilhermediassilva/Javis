@@ -24,10 +24,26 @@ export interface XavierConversation {
   last_message_at?: string;
 }
 
+export interface XavierMemorySummary {
+  id: string;
+  user_id: string;
+  conversation_id: string | null;
+  summary: string;
+  source_message_count: number;
+  pinned: boolean;
+  updated_at: string;
+}
+
+export interface XavierMemoryContext {
+  history: XavierHistoryItem[];
+  summary: string | null;
+}
+
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const PROFILE_TABLE = "xavier_profiles";
 const CONVERSATION_TABLE = "xavier_conversations";
 const MESSAGE_TABLE = "xavier_messages";
+const SUMMARY_TABLE = "xavier_memory_summaries";
 
 function getSupabaseKey(): string {
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "";
@@ -147,6 +163,106 @@ export async function loadXavierHistory(conversationId: string, limit = 20): Pro
     .filter((row) => (row.role === "user" || row.role === "assistant") && typeof row.content === "string")
     .reverse()
     .map((row) => ({ role: row.role as "user" | "assistant", content: row.content as string }));
+}
+
+export async function loadXavierSummary(conversationId: string): Promise<XavierMemorySummary | null> {
+  const params = new URLSearchParams({
+    select: "id,user_id,conversation_id,summary,source_message_count,pinned,updated_at",
+    conversation_id: `eq.${conversationId}`,
+    order: "updated_at.desc",
+    limit: "1",
+  });
+  const rows = await readRows<XavierMemorySummary>(await supabaseRequest(`${SUMMARY_TABLE}?${params}`), "summary");
+  return rows[0] || null;
+}
+
+export async function listXavierSummaries(userId: string): Promise<XavierMemorySummary[]> {
+  const params = new URLSearchParams({
+    select: "id,user_id,conversation_id,summary,source_message_count,pinned,updated_at",
+    user_id: `eq.${userId}`,
+    order: "updated_at.desc",
+    limit: "10",
+  });
+  return readRows<XavierMemorySummary>(await supabaseRequest(`${SUMMARY_TABLE}?${params}`), "summary");
+}
+
+export async function loadXavierMemoryContext(conversationId: string, memoryEnabled: boolean): Promise<XavierMemoryContext> {
+  if (!memoryEnabled) return { history: [], summary: null };
+  const [history, summary] = await Promise.all([
+    loadXavierHistory(conversationId, 20),
+    loadXavierSummary(conversationId),
+  ]);
+  return { history, summary: summary?.summary || null };
+}
+
+export function buildXavierRollingSummary(previousSummary: string | null, history: XavierHistoryItem[]): string {
+  const recent = history
+    .filter((item) => item.content.trim())
+    .map((item) => `${item.role === "user" ? "Usuário" : "Xavier"}: ${item.content.trim().slice(0, 600)}`)
+    .join("\n");
+  const prefix = previousSummary?.trim()
+    ? `Resumo acumulado anterior:\n${previousSummary.trim()}\n\nAtualizações recentes:\n`
+    : "Resumo acumulado da conversa:\n";
+  return `${prefix}${recent}`.trim().slice(-6000);
+}
+
+async function countXavierConversationMessages(conversationId: string): Promise<number> {
+  const params = new URLSearchParams({
+    select: "id",
+    conversation_id: `eq.${conversationId}`,
+    limit: "1",
+  });
+  const response = await supabaseRequest(`${MESSAGE_TABLE}?${params}`, {
+    headers: { Prefer: "count=exact", Range: "0-0" },
+  });
+  if (!response.ok) throw new Error(`Supabase message count ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  const range = response.headers.get("content-range") || "";
+  const separator = range.lastIndexOf("/");
+  const count = separator >= 0 ? Number(range.slice(separator + 1)) : 0;
+  return Number.isFinite(count) ? count : 0;
+}
+
+export async function maybeCompactXavierConversation(userId: string, conversationId: string, retentionDays: number): Promise<boolean> {
+  const count = await countXavierConversationMessages(conversationId);
+  if (count < 20 || count % 20 !== 0) return false;
+  const [history, previous] = await Promise.all([
+    loadXavierHistory(conversationId, 20),
+    loadXavierSummary(conversationId),
+  ]);
+  const summary = buildXavierRollingSummary(previous?.summary || null, history);
+  const body = {
+    user_id: userId,
+    conversation_id: conversationId,
+    summary,
+    source_message_count: count,
+    updated_at: new Date().toISOString(),
+  };
+  if (previous) {
+    const params = new URLSearchParams({ id: `eq.${previous.id}` });
+    const response = await supabaseRequest(`${SUMMARY_TABLE}?${params}`, {
+      method: "PATCH",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`Supabase summary update ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  } else {
+    const response = await supabaseRequest(SUMMARY_TABLE, {
+      method: "POST",
+      headers: { Prefer: "return=minimal" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`Supabase summary insert ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  }
+  await purgeExpiredXavierMessages(userId, retentionDays);
+  return true;
+}
+
+export async function purgeExpiredXavierMessages(userId: string, retentionDays: number): Promise<void> {
+  const days = Math.max(7, Math.min(3650, Math.round(retentionDays)));
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  const params = new URLSearchParams({ user_id: `eq.${userId}`, created_at: `lt.${cutoff}` });
+  const response = await supabaseRequest(`${MESSAGE_TABLE}?${params}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(`Supabase retention cleanup ${response.status}: ${(await response.text()).slice(0, 300)}`);
 }
 
 export async function consumeXavierMessageQuota(userId: string, monthlyLimit: number): Promise<boolean> {

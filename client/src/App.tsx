@@ -9,6 +9,7 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import TelegramConnect from "./pages/TelegramConnect";
+import MemorySettings from "./pages/MemorySettings";
 
 function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   const { loading, user } = useAuth();
@@ -26,11 +27,16 @@ function ProtectedTelegramConnect() {
   return <AuthenticatedRoute><TelegramConnect /></AuthenticatedRoute>;
 }
 
+function ProtectedMemorySettings() {
+  return <AuthenticatedRoute><MemorySettings /></AuthenticatedRoute>;
+}
+
 function Router() {
   return (
     <Switch>
       <Route path={"/"} component={ProtectedHome} />
       <Route path={"/telegram-connect"} component={ProtectedTelegramConnect} />
+      <Route path={"/memory"} component={ProtectedMemorySettings} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

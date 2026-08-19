@@ -237,3 +237,24 @@ pnpm build        # build de produção em ./dist
 Este projeto foi concebido, prototipado e codificado pela **NowGo AI**. A personalidade do assistente — incluindo o nome J.A.R.V.I.S., o tom mordomístico e a estética HUD — é uma referência cultural ao universo *Homem de Ferro*; nenhum direito autoral é reivindicado sobre essa inspiração. Todo o código de aplicação, prompts, integrações e *bindings* com APIs públicas é de autoria da NowGo AI.
 
 Para questões comerciais, parcerias com governos e secretarias, ou licenciamento, contate a equipe da NowGo AI.
+
+
+## Contas, Telegram individual e memória econômica
+
+A versão multiusuário usa o projeto Supabase `Cockpit_NowGo` como fonte de verdade para autenticação, conversas, mensagens, resumos compactos, limites de uso e conexões Telegram. Cada registro é associado ao `user_id` da sessão autenticada; tokens de bots Telegram são cifrados no backend com `XAVIER_ENCRYPTION_KEY` e nunca retornam ao navegador.
+
+O histórico web e Telegram compartilham o contexto da conta, mas permanecem identificados por canal e conversa. O Xavier carrega os últimos turnos e, a cada marco de vinte mensagens, cria um resumo determinístico limitado a 6.000 caracteres sem fazer uma segunda chamada ao modelo. A limpeza de mensagens brutas ocorre de acordo com `retention_days`, com limite mínimo de sete dias. Não há banco vetorial nem armazenamento de áudio bruto nesta fase.
+
+O usuário controla a memória pela rota `/memory`, acessível pelo botão **MEMÓRIA** do cockpit. Nessa tela é possível ativar ou desativar a memória persistente, configurar retenção e limite mensal, consultar os resumos compactados e apagar todos os dados operacionais da conta. A conta de autenticação permanece disponível após a exclusão para permitir um novo começo.
+
+Rotas autenticadas principais:
+
+| Rota | Função |
+|---|---|
+| `/` | Cockpit web do Xavier |
+| `/telegram-connect` | Conexão e desconexão do bot Telegram individual pelo navegador |
+| `/memory` | Preferências, resumos, retenção e exclusão da memória |
+| `/api/xavier/profile` | Leitura e atualização das preferências da conta |
+| `/api/xavier/memory` | Consulta de resumos e exclusão dos dados operacionais |
+
+A política econômica recomendada é não armazenar áudio ou vídeo bruto, limitar mensagens por mês e usar resumos somente quando necessário. Busca semântica/embeddings poderá ser adicionada posteriormente, mas não faz parte do armazenamento inicial.

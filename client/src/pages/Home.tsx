@@ -386,6 +386,9 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            <Link href="/memory" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
+              MEMÓRIA
+            </Link>
             <Link href="/telegram-connect" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
               TELEGRAM
             </Link>
