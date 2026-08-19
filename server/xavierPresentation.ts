@@ -57,8 +57,17 @@ async function ensureBucket(): Promise<void> {
     body: JSON.stringify({ id: BUCKET, name: BUCKET, public: false, file_size_limit: MAX_FILE_SIZE }),
     signal: AbortSignal.timeout(8_000),
   });
+  const detail = await response.text().catch(() => "");
   if (response.ok || response.status === 409) return;
-  throw new Error(`Supabase storage bucket ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  if (response.status === 400) {
+    try {
+      const payload = JSON.parse(detail) as { code?: string; message?: string; statusCode?: string | number };
+      if (payload.code === "BucketAlreadyExists" || String(payload.statusCode) === "409" || /already exists|ja existe|já existe/i.test(payload.message || "")) return;
+    } catch {
+      // Mantém o erro original quando a resposta não for JSON.
+    }
+  }
+  throw new Error(`Supabase storage bucket ${response.status}: ${detail.slice(0, 300)}`);
 }
 
 async function uploadPresentation(path: string, content: Buffer): Promise<void> {

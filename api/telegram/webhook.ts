@@ -172,7 +172,18 @@ async function processPerUserTelegramMessage(input: {
       console.warn("[telegram:xavier] typing indicator failed", (error as Error).message);
     });
     if (audio) {
+      console.info("[telegram:xavier] audio transcription started", {
+        updateId: update.update_id,
+        fileIdPresent: Boolean(audio.fileId),
+        mimeType: audio.mimeType,
+        fileName: audio.fileName,
+        fileSize: audio.fileSize || null,
+      });
       const transcription = await transcribeTelegramAudio(decryptXavierTelegramToken(connection), audio);
+      console.info("[telegram:xavier] audio transcription completed", {
+        updateId: update.update_id,
+        characters: transcription.length,
+      });
       text = text ? `${text}\n\n[Áudio transcrito]\n${transcription}` : transcription;
     }
     if (!text) {
@@ -324,7 +335,18 @@ async function processLegacyTelegramMessage(input: {
       console.warn("[telegram] typing indicator failed", (error as Error).message);
     });
     if (audio) {
+      console.info("[telegram] audio transcription started", {
+        updateId: update.update_id,
+        fileIdPresent: Boolean(audio.fileId),
+        mimeType: audio.mimeType,
+        fileName: audio.fileName,
+        fileSize: audio.fileSize || null,
+      });
       const transcription = await transcribeTelegramAudio(process.env.TELEGRAM_BOT_TOKEN || "", audio);
+      console.info("[telegram] audio transcription completed", {
+        updateId: update.update_id,
+        characters: transcription.length,
+      });
       text = text ? `${text}\n\n[Áudio transcrito]\n${transcription}` : transcription;
     }
     if (!text) {
