@@ -17,3 +17,11 @@ As entregas reais incluem os eventos `task_created` e `task_stopped`. Cada entre
 ## Hipótese técnica
 
 O endpoint atual do Xavier rejeita qualquer POST de teste sem os headers de assinatura antes de responder 200. Se a Manus fizer uma validação inicial sem assinatura, esse comportamento pode impedir o cadastro; dependendo do painel, o erro pode aparecer como 500 durante o salvamento. A URL assinada também precisa coincidir exatamente com a URL registrada, incluindo eventual query string.
+
+## Publicação da correção
+
+O commit `ba72ae5` foi publicado na branch `main` e o projeto Vercel `javis` iniciou o deployment de produção `javis-ofpwf2tta-nowgo.vercel.app`. Durante a primeira verificação, o deployment estava em estado `Building`; a validação do POST será feita depois de o Vercel exibir `Ready`.
+
+## Teste de produção
+
+Após o deployment `ba72ae5` aparecer como `Ready`, foi enviado um POST JSON de verificação sem assinatura para `https://jarvisnowgo.com/api/manus/webhook`. A resposta foi `HTTP/2 200`, confirmando que a validação inicial da Manus pode alcançar o endpoint e receber o status exigido. Eventos reais continuam sujeitos à assinatura RSA-SHA256.
