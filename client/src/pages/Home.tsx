@@ -8,7 +8,7 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useElevenLabsTTS } from "@/hooks/useElevenLabsTTS";
 import { jarvisChatStream, fileToAttachment, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
-import { waitForXavierManusTask } from "@/lib/xavierApi";
+import { waitForXavierManusTask, type XavierManusTaskAttachment } from "@/lib/xavierApi";
 import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
@@ -70,6 +70,7 @@ export default function Home() {
   const [hudState, setHudState] = useState<HudState>("INITIALISING");
   const [muted, setMuted] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [generatedFiles, setGeneratedFiles] = useState<XavierManusTaskAttachment[]>([]);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [showSetup, setShowSetup] = useState(true);
   const [clock, setClock] = useState("");
@@ -151,6 +152,9 @@ export default function Home() {
             const result = task.result_text?.trim()
               || task.error_message?.trim()
               || "A tarefa Manus terminou sem um resultado textual.";
+            if (task.attachments?.length) {
+              setGeneratedFiles((files) => [...task.attachments, ...files].filter((file, index, all) => all.findIndex((item) => item.url === file.url) === index).slice(0, 8));
+            }
             setLogs((l) => [...l, `Xavier: ${result}`]);
             historyRef.current = [
               ...historyRef.current,
@@ -516,6 +520,27 @@ export default function Home() {
             ▸ REGISTRO DE ATIVIDADE
           </div>
           <LogWidget logs={logs} />
+
+          {generatedFiles.length > 0 && (
+            <div className="shrink-0" style={{ border: `1px solid ${C.BORDER}`, background: C.PANEL, padding: "6px" }}>
+              <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>▸ ARQUIVOS GERADOS</div>
+              <div className="mt-1 flex flex-col gap-1">
+                {generatedFiles.map((file) => (
+                  <a
+                    key={file.url}
+                    href={file.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="truncate text-[8px] underline"
+                    style={{ color: C.PRI }}
+                    title={`Baixar ${file.file_name}`}
+                  >
+                    {file.file_name}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
 

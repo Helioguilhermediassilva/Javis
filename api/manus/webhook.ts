@@ -8,6 +8,7 @@ import {
 } from "../../server/xavierManus.js";
 import {
   getStoredXavierTelegramConnection,
+  sendXavierTelegramDocument,
   sendXavierTelegramMessage,
 } from "../../server/xavierTelegram.js";
 import { appendXavierMessage } from "../../server/xavierMemory.js";
@@ -48,6 +49,15 @@ async function deliverTelegramResult(task: Awaited<ReturnType<typeof applyManusW
   }
   const result = buildManusResultText(task);
   await sendXavierTelegramMessage(connection, task.telegram_chat_id, result);
+  for (const attachment of task.attachments || []) {
+    try {
+      await sendXavierTelegramDocument(connection, task.telegram_chat_id, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`);
+    } catch (error) {
+      // O link HTTPS continua no texto para que a entrega da tarefa não seja perdida
+      // caso o Telegram não consiga buscar o arquivo remoto.
+      console.warn("[manus-webhook] document delivery failed", attachment.file_name, (error as Error).message);
+    }
+  }
   if (task.conversation_id) {
     await appendXavierMessage({
       userId: task.user_id,

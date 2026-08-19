@@ -36,10 +36,17 @@ export async function xavierApi<T>(path: string, init: RequestInit = {}): Promis
   return payload;
 }
 
+export interface XavierManusTaskAttachment {
+  file_name: string;
+  url: string;
+  size_bytes?: number;
+}
+
 export interface XavierManusTaskStatus {
   id: string;
   status: "running" | "completed" | "failed" | "stopped";
   result_text: string | null;
+  attachments: XavierManusTaskAttachment[];
   error_message: string | null;
   task_url: string | null;
   updated_at: string;

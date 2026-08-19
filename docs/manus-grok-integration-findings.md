@@ -65,3 +65,21 @@ A integração foi implementada de forma inerte quando `MANUS_API_KEY` não exis
 
 Depois da variável estar ativa, registrar no painel/API da Manus o callback público `https://jarvisnowgo.com/api/manus/webhook`. O endpoint já valida `X-Webhook-Signature` e `X-Webhook-Timestamp`, rejeita timestamps antigos e atualiza a tarefa de modo idempotente. O webhook deve apontar para o projeto `javis`, não para o projeto Vercel `jarvis-now-go-ai` conectado ao repositório diferente `Jarvis_NowGo_AI`.
 
+## Verificação de ativação no Vercel
+
+Em 19 de agosto de 2026, o projeto correto `https://vercel.com/nowgo/javis` estava em estado `Ready`, ligado ao repositório `Helioguilhermediassilva/Javis`, branch `main`, commit `ecdb3f4`, com os domínios `jarvisnowgo.com` e `jarvis.nowgoai.com`.
+
+A tela de Environment Variables mostrou `XAI_API_KEY`, `ELEVENLABS_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_ALLOWED_CHAT_IDS`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` e `XAVIER_ENCRYPTION_KEY`, mas **não mostrou `MANUS_API_KEY`**. O valor da chave nunca foi visualizado.
+
+Fonte: https://vercel.com/nowgo/javis/settings/environment-variables
+
+## Correção do fluxo de PDF — 19/08/2026
+
+O pedido de gerar PDF chegava transcrito ao Xavier, mas podia permanecer no caminho textual do Grok porque a detecção automática não reconhecia todos os padrões de geração de arquivos. Além disso, tarefas Manus persistiam apenas `result_text`, e os canais web e Telegram não tinham transporte de anexos.
+
+A correção adicionou detecção de pedidos de gerar/criar/produzir/preparar/elaborar PDF, uma instrução explícita para a Manus anexar o arquivo real, a coluna privada `xavier_manus_tasks.attachments` no Supabase, normalização de URLs apenas HTTPS, links de arquivos no cockpit web e envio de documentos pelo método `sendDocument` do Telegram. Se o Telegram não conseguir buscar a URL remota, o link seguro permanece na mensagem textual. O áudio de entrada continua sem persistência.
+
+Validação local: TypeScript sem erros; 8 testes do roteador Manus e webhook Telegram aprovados; build Vite de produção aprovado.
+
+Referência oficial do formato de anexos `task_stopped`: https://open.manus.ai/docs/v2/webhooks-overview
+

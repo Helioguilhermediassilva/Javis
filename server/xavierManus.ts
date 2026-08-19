@@ -11,6 +11,12 @@ const TASK_TABLE = "xavier_manus_tasks";
 export type XavierManusChannel = "web" | "telegram";
 export type XavierManusTaskStatus = "running" | "completed" | "failed" | "stopped";
 
+export interface XavierManusAttachment {
+  file_name: string;
+  url: string;
+  size_bytes?: number;
+}
+
 export interface XavierManusTask {
   id: string;
   user_id: string;
@@ -23,6 +29,7 @@ export interface XavierManusTask {
   status: XavierManusTaskStatus;
   request_text: string;
   result_text: string | null;
+  attachments: XavierManusAttachment[];
   error_message: string | null;
   stop_reason: string | null;
   created_at: string;
@@ -128,6 +135,38 @@ function safeText(value: unknown, max = 12_000): string | null {
   return text ? text.slice(0, max) : null;
 }
 
+function safeHttpsUrl(value: unknown): string | null {
+  const text = safeText(value, 2_000);
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    return url.protocol === "https:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAttachments(value: unknown): XavierManusAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const normalized: XavierManusAttachment[] = [];
+  for (const item of value.slice(0, 8)) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const url = safeHttpsUrl(record.url);
+    if (!url || seen.has(url)) continue;
+    const fileName = safeText(record.file_name, 180) || "arquivo-gerado";
+    const size = typeof record.size_bytes === "number" && Number.isFinite(record.size_bytes) && record.size_bytes >= 0
+      ? Math.floor(record.size_bytes)
+      : undefined;
+    normalized.push(size === undefined ? { file_name: fileName, url } : { file_name: fileName, url, size_bytes: size });
+    seen.add(url);
+  }
+  return normalized;
+}
+
+const TASK_SELECT = "id,user_id,channel,conversation_id,telegram_connection_id,telegram_chat_id,manus_task_id,task_url,status,request_text,result_text,attachments,error_message,stop_reason,created_at,updated_at,completed_at,delivered_at";
+
 export function isManusConfigured(): boolean {
   return Boolean(process.env.MANUS_API_KEY);
 }
@@ -150,8 +189,10 @@ export function detectManusTaskRequest(message: string): { requestText: string; 
   if (/\b(?:use|usar|utilize|acion[ae]|chame|chamar)\s+(?:a\s+)?(?:manus|sun)\b/i.test(raw)) {
     return { requestText: raw, title: "Tarefa Manus solicitada pelo Xavier" };
   }
-  if (/\b(?:pesquisa|pesquise|investigue|investigar|relat[óo]rio|documento|autom[aá]?[çc][aã]o|an[aá]lise profunda|tarefa profunda)\b/i.test(raw)) {
-    return { requestText: raw, title: "Execução profunda do Xavier" };
+  if (/\b(?:pesquisa|pesquise|investigue|investigar|relat[óo]rio|documento|autom[aá]?[çc][aã]o|an[aá]lise profunda|tarefa profunda)\b/i.test(raw)
+    || /\b(?:ger[ae]r?|crie?|produz[ae]r?|prepare?|elabore?)\b[\s\S]{0,80}\b(?:pdf|documento|arquivo|relat[óo]rio)\b/i.test(raw)
+    || /\b(?:pdf|documento|arquivo)\b[\s\S]{0,40}\b(?:baixar|download|anex[ae]r?|envie?|enviar)\b/i.test(raw)) {
+    return { requestText: raw, title: /\bpdf\b/i.test(raw) ? "Geração de PDF do Xavier" : "Execução profunda do Xavier" };
   }
   return null;
 }
@@ -159,8 +200,12 @@ export function detectManusTaskRequest(message: string): { requestText: string; 
 export async function createManusTask(input: XavierManusTaskContext, requestText: string, options: ManusTaskCreationOptions = {}): Promise<XavierManusTask> {
   const normalized = requestText.trim().slice(0, 12_000);
   if (!normalized) throw new ManusIntegrationError(400, "A tarefa Manus não pode estar vazia");
+  const pdfRequested = /\bpdf\b/i.test(normalized);
+  const manusPrompt = pdfRequested
+    ? `${normalized}\n\nInstrução adicional: gere o resultado como um arquivo PDF real, anexe o PDF ao concluir e informe brevemente o que foi produzido. Não responda apenas que não pode gerar arquivos.`
+    : normalized;
   const body: Record<string, unknown> = {
-    message: { content: normalized },
+    message: { content: manusPrompt.slice(0, 12_000) },
     locale: "pt-BR",
     interactive_mode: false,
     title: (options.title || "Tarefa profunda do Xavier").slice(0, 160),
@@ -184,6 +229,7 @@ export async function createManusTask(input: XavierManusTaskContext, requestText
       task_url: safeText(created.task_url, 500),
       status: "running",
       request_text: normalized,
+      attachments: [],
     }),
   });
   const rows = await readRows<XavierManusTask>(insert, "Manus task insert");
@@ -203,7 +249,7 @@ export async function sendManusTaskMessage(taskId: string, message: string): Pro
 
 export async function listXavierManusTasks(userId: string, limit = 20): Promise<XavierManusTask[]> {
   const params = new URLSearchParams({
-    select: "id,user_id,channel,conversation_id,telegram_connection_id,telegram_chat_id,manus_task_id,task_url,status,request_text,result_text,error_message,stop_reason,created_at,updated_at,completed_at,delivered_at",
+    select: TASK_SELECT,
     user_id: `eq.${userId}`,
     order: "created_at.desc",
     limit: String(Math.max(1, Math.min(limit, 50))),
@@ -213,7 +259,7 @@ export async function listXavierManusTasks(userId: string, limit = 20): Promise<
 
 export async function getXavierManusTask(userId: string, taskId: string): Promise<XavierManusTask | null> {
   const params = new URLSearchParams({
-    select: "id,user_id,channel,conversation_id,telegram_connection_id,telegram_chat_id,manus_task_id,task_url,status,request_text,result_text,error_message,stop_reason,created_at,updated_at,completed_at,delivered_at",
+    select: TASK_SELECT,
     user_id: `eq.${userId}`,
     id: `eq.${taskId}`,
     limit: "1",
@@ -234,7 +280,7 @@ export async function markManusTaskDelivered(userId: string, taskId: string): Pr
 
 async function findTaskByManusId(manusTaskId: string): Promise<XavierManusTask | null> {
   const params = new URLSearchParams({
-    select: "id,user_id,channel,conversation_id,telegram_connection_id,telegram_chat_id,manus_task_id,task_url,status,request_text,result_text,error_message,stop_reason,created_at,updated_at,completed_at,delivered_at",
+    select: TASK_SELECT,
     manus_task_id: `eq.${manusTaskId}`,
     limit: "1",
   });
@@ -252,6 +298,7 @@ export async function applyManusWebhookEvent(event: XavierManusWebhookEvent): Pr
   const eventType = safeText(event.event_type, 80);
   const now = new Date().toISOString();
   const result = safeText(detail?.message, 12_000);
+  const attachments = normalizeAttachments(detail?.attachments);
   const stopReason = safeText(detail?.stop_reason, 80);
   const patch: Record<string, unknown> = { updated_at: now };
   if (safeText(detail?.task_url, 500)) patch.task_url = safeText(detail?.task_url, 500);
@@ -260,6 +307,7 @@ export async function applyManusWebhookEvent(event: XavierManusWebhookEvent): Pr
   } else if (eventType === "task_stopped") {
     patch.status = stopReason === "finish" ? "completed" : "stopped";
     patch.result_text = result;
+    patch.attachments = attachments;
     patch.stop_reason = stopReason;
     patch.completed_at = now;
   }
@@ -318,6 +366,7 @@ export function buildManusResultText(task: XavierManusTask): string {
     ? "Concluí a tarefa profunda com a Manus/SUN."
     : "A tarefa profunda da Manus/SUN foi interrompida antes da conclusão.";
   const body = task.result_text?.trim() || task.error_message?.trim() || "Não recebi um resultado textual da tarefa.";
-  const url = task.task_url ? `\n\nAcompanhe na Manus: ${task.task_url}` : "";
-  return `${header}\n\n${body}${url}`.slice(0, 12_000);
+  const taskUrl = task.task_url ? `\n\nAcompanhe na Manus: ${task.task_url}` : "";
+  const attachments = (task.attachments || []).slice(0, 8).map((file) => `\n• ${file.file_name}: ${file.url}`).join("");
+  return `${header}\n\n${body}${attachments ? `\n\nArquivos gerados:${attachments}` : ""}${taskUrl}`.slice(0, 12_000);
 }

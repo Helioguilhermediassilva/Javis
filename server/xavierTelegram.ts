@@ -244,3 +244,18 @@ export async function sendXavierTelegramMessage(connection: StoredConnection, ch
     disable_web_page_preview: true,
   });
 }
+
+export async function sendXavierTelegramDocument(
+  connection: StoredConnection,
+  chatId: string,
+  documentUrl: string,
+  caption?: string,
+): Promise<void> {
+  const parsed = new URL(documentUrl);
+  if (parsed.protocol !== "https:") throw new Error("Arquivo Telegram precisa usar URL HTTPS");
+  await telegramApi(decryptToken(connection.encrypted_bot_token), "sendDocument", {
+    chat_id: chatId,
+    document: parsed.toString(),
+    caption: caption?.slice(0, 1024),
+  });
+}

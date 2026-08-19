@@ -36,6 +36,10 @@ describe("Xavier Manus router", () => {
       requestText: "crie um relatório executivo",
       title: "Tarefa profunda do Xavier",
     });
+    expect(detectManusTaskRequest("gere um PDF com o relatório executivo")).toEqual({
+      requestText: "gere um PDF com o relatório executivo",
+      title: "Geração de PDF do Xavier",
+    });
     expect(detectManusTaskRequest("Apenas me diga uma saudação")).toBeNull();
   });
 
@@ -52,6 +56,7 @@ describe("Xavier Manus router", () => {
       status: "running",
       request_text: "pesquisa",
       result_text: null,
+      attachments: [],
       error_message: null,
       stop_reason: null,
       created_at: "2026-08-19T00:00:00Z",
