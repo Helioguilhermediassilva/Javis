@@ -12,14 +12,16 @@
 //   plausíveis e exigimos um prefixo curto ("ei", "olá", "oi") OPCIONAL.
 //
 // API:
-//   matchWakeWord("Ei JARVIS, abra o briefing de saúde")
+//   matchWakeWord("Ei XAVIER, abra o briefing de saúde")
 //     → { matched: true, command: "abra o briefing de saúde" }
-//   matchWakeWord("Ei JARVIS")
-//     → { matched: true, command: "" }   // sem comando ainda — JARVIS responde "Senhor(a)?"
+//   matchWakeWord("Ei XAVIER")
+//     → { matched: true, command: "" }   // sem comando ainda — XAVIER responde "Senhor(a)?"
 //   matchWakeWord("vamos almoçar")
 //     → { matched: false }
 
 const WAKE_VARIANTS = [
+  "xavier",
+  // Compatibilidade com a wake-word legada.
   "jarvis",
   "jarves",
   "jarvez",
@@ -44,7 +46,7 @@ const OPTIONAL_PREFIXES = [
 
 export interface WakeWordMatch {
   matched: boolean;
-  /** O texto após o wake-word (pode ser vazio se a fala foi só "Ei JARVIS"). */
+  /** O texto após o wake-word (pode ser vazio se a fala foi só "Ei XAVIER"). */
   command: string;
   /** Variante exata que casou (debug). */
   variant?: string;
@@ -99,8 +101,8 @@ function escapeRx(s: string): string {
 /**
  * Estado de "armado": após detectar wake-word sem comando, ficamos por
  * `windowMs` aceitando a próxima fala como comando. Útil para UX:
- *   Usuário: "Ei JARVIS"
- *   JARVIS:  "Senhora?"
+ *   Usuário: "Ei XAVIER"
+ *   XAVIER:  "Senhora?"
  *   Usuário: "Mostre o briefing de saúde"   ← já cai como comando direto
  */
 export class WakeWordArmedWindow {

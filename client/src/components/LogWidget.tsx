@@ -21,7 +21,7 @@ interface LogEntry {
 function getLogColor(text: string): string {
   const tl = text.toLowerCase();
   if (tl.startsWith("you:")) return C.WHITE;
-  if (tl.startsWith("jarvis:")) return C.PRI;
+  if (tl.startsWith("xavier:")) return C.PRI;
   if (tl.startsWith("file:")) return C.GREEN;
   if (tl.includes("err")) return C.RED;
   return C.ACC2;

@@ -76,11 +76,11 @@ export default function Home() {
   const historyRef = useRef<ChatMessage[]>([]);
   const processingRef = useRef(false);
   const prefsRef = useRef<JarvisPrefs>(DEFAULT_PREFS);
-  // Janela de "armado" do wake-word: após o usuário dizer só "Ei JARVIS",
+  // Janela de "armado" do wake-word: após o usuário dizer só "Ei XAVIER",
   // ficamos 8s aceitando a próxima fala como comando direto.
   const wakeArmedRef = useRef(new WakeWordArmedWindow(8000));
 
-  // TTS: voz original do JARVIS via ElevenLabs, com fallback local silencioso apenas em caso de indisponibilidade temporária.
+  // TTS: voz original do XAVIER via ElevenLabs, com fallback local silencioso apenas em caso de indisponibilidade temporária.
   const elevenTts = useElevenLabsTTS();
   const browserTts = useSpeechSynthesis({ lang: "pt-BR", rate: 1.0, pitch: 1.0 });
   const ttsRef = useRef({ elevenTts, browserTts });
@@ -116,7 +116,7 @@ export default function Home() {
     setPendingAttachments([]);
     setCurrentFile(null);
     try {
-      // Índice da linha "Jarvis: ..." no log para atualizar incrementalmente
+      // Índice da linha "Xavier: ..." no log para atualizar incrementalmente
       // conforme os deltas chegam (sem criar uma linha por delta).
       let liveLogIndex = -1;
       let liveBuffer = "";
@@ -130,10 +130,10 @@ export default function Home() {
           setLogs((l) => {
             if (liveLogIndex === -1) {
               liveLogIndex = l.length;
-              return [...l, `Jarvis: ${liveBuffer}`];
+              return [...l, `Xavier: ${liveBuffer}`];
             }
             const next = l.slice();
-            next[liveLogIndex] = `Jarvis: ${liveBuffer}`;
+            next[liveLogIndex] = `Xavier: ${liveBuffer}`;
             return next;
           });
         },
@@ -152,9 +152,9 @@ export default function Home() {
       // Garante que a linha final do log tenha a resposta completa exatamente
       // como retornada (caso o LLM tenha refinado depois das tool calls).
       setLogs((l) => {
-        if (liveLogIndex === -1) return [...l, `Jarvis: ${reply}`];
+        if (liveLogIndex === -1) return [...l, `Xavier: ${reply}`];
         const next = l.slice();
-        next[liveLogIndex] = `Jarvis: ${reply}`;
+        next[liveLogIndex] = `Xavier: ${reply}`;
         return next;
       });
       setHudState("SPEAKING");
@@ -177,7 +177,7 @@ export default function Home() {
     const trimmed = txt.trim();
     if (!trimmed) return;
     if (prefsRef.current.activationMode === "wakeword") {
-      // Janela de armado: se acabamos de dizer "Ei JARVIS" e ouvimos algo dentro
+      // Janela de armado: se acabamos de dizer "Ei XAVIER" e ouvimos algo dentro
       // de 8s, processamos direto.
       if (wakeArmedRef.current.isArmed()) {
         wakeArmedRef.current.disarm();
@@ -192,11 +192,11 @@ export default function Home() {
       if (m.command) {
         processCommand(m.command);
       } else {
-        // Só "Ei JARVIS" sem comando — acusa presença e abre janela armada.
+        // Só "Ei XAVIER" sem comando — acusa presença e abre janela armada.
         wakeArmedRef.current.arm();
         const honorific = prefsRef.current.honorific;
         const reply = honorific === "senhora" ? "Senhora?" : "Senhor?";
-        setLogs((l) => [...l, `Jarvis: ${reply}`]);
+        setLogs((l) => [...l, `Xavier: ${reply}`]);
         setHudState("SPEAKING");
         speakReply(reply, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
       }
@@ -281,15 +281,15 @@ export default function Home() {
     }
   }, []);
 
-  // Quando o usuário clica em "ATIVAR JARVIS", o gesto desbloqueia autoplay de áudio
+  // Quando o usuário clica em "ATIVAR XAVIER", o gesto desbloqueia autoplay de áudio
   // e podemos solicitar permissão de microfone com segurança.
   const handleSetupDone = useCallback((prefs: JarvisPrefs) => {
     prefsRef.current = prefs;
     setShowSetup(false);
     setHudState("LISTENING");
-    setLogs((l) => [...l, "SYS: Sistema inicializado. J.A.R.V.I.S. online."]);
+    setLogs((l) => [...l, "SYS: Sistema inicializado. XAVIER online."]);
     if (prefs.activationMode === "wakeword") {
-      setLogs((l) => [...l, "SYS: Modo wake-word ativo — diga 'Ei JARVIS' antes do comando."]);
+      setLogs((l) => [...l, "SYS: Modo wake-word ativo — diga 'Ei XAVIER' antes do comando."]);
     }
 
     // Saudação falada adaptada ao tratamento escolhido. Esta primeira chamada
@@ -298,7 +298,7 @@ export default function Home() {
       prefs.honorific === "senhora"
         ? "À sua disposição, senhora. Como posso ajudar?"
         : "À sua disposição, senhor. Como posso ajudar?";
-    setLogs((l) => [...l, `Jarvis: ${greet}`]);
+    setLogs((l) => [...l, `Xavier: ${greet}`]);
     setHudState("SPEAKING");
     speakReply(greet, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
   }, [speakReply]);
@@ -367,7 +367,7 @@ export default function Home() {
         </span>
         <div className="text-center">
           <div className="text-[17px] font-bold tracking-[0.15em]" style={{ color: C.PRI }}>
-            J.A.R.V.I.S
+            XAVIER
           </div>
           <div className="text-[7px] tracking-wider" style={{ color: C.PRI_DIM }}>
             Sistema Inteligente Operacional · NowGo AI
@@ -493,7 +493,7 @@ export default function Home() {
           />
           <div className="text-[7px]" style={{ color: C.TEXT_MED }}>
             {currentFile
-              ? `Diga ao JARVIS o que fazer com ${currentFile.name}`
+              ? `Diga ao XAVIER o que fazer com ${currentFile.name}`
               : "Nenhum arquivo carregado — arraste ou clique acima"}
           </div>
 

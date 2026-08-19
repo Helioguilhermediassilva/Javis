@@ -278,13 +278,13 @@ export default function HudCanvas({ state, muted }: HudCanvasProps) {
         ctx.fill();
       }
 
-      // JARVIS text in center
+      // Xavier text in center
       const textAlpha = Math.min(1, (halo * 2) / 255);
       ctx.fillStyle = hexToRgba(C.PRI, textAlpha);
       ctx.font = `bold ${13 * dpr}px 'JetBrains Mono', monospace`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText("J.A.R.V.I.S", cx, cy);
+      ctx.fillText("XAVIER", cx, cy);
 
       // Particles
       for (const pt of a.particles) {

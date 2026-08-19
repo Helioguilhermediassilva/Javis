@@ -3,6 +3,7 @@ import { matchWakeWord, WakeWordArmedWindow } from "./wakeWord";
 
 describe("matchWakeWord", () => {
   it("casa formas canônicas com e sem prefixo", () => {
+    expect(matchWakeWord("Xavier").matched).toBe(true);
     expect(matchWakeWord("Jarvis").matched).toBe(true);
     expect(matchWakeWord("JARVIS, briefing de saúde").matched).toBe(true);
     expect(matchWakeWord("Ei JARVIS").matched).toBe(true);
@@ -24,6 +25,7 @@ describe("matchWakeWord", () => {
   });
 
   it("retorna comando vazio quando só falaram o wake-word", () => {
+    expect(matchWakeWord("XAVIER.").command).toBe("");
     expect(matchWakeWord("JARVIS.").command).toBe("");
     expect(matchWakeWord("Ei JARVIS").command).toBe("");
     expect(matchWakeWord("oi jarvis,").command).toBe("");
@@ -40,6 +42,8 @@ describe("matchWakeWord", () => {
   });
 
   it("ignora pontuação e espaços extras antes do wake-word", () => {
+    expect(matchWakeWord("  ei,  Xavier...   abra o painel").matched).toBe(true);
+    expect(matchWakeWord("  ei,  Xavier...   abra o painel").command).toBe("abra o painel");
     expect(matchWakeWord("  ei,  Jarvis...   abra o painel").matched).toBe(true);
     expect(matchWakeWord("  ei,  Jarvis...   abra o painel").command).toBe("abra o painel");
   });

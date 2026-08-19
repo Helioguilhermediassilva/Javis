@@ -112,10 +112,10 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
         {/* Título */}
         <div className="text-center mb-6">
           <h2 className="text-lg font-bold" style={{ color: C.PRI }}>
-            JARVIS — INICIALIZAÇÃO
+            XAVIER — INICIALIZAÇÃO
           </h2>
           <p className="text-[8px] mt-1" style={{ color: C.TEXT_DIM }}>
-            Configure sua interface antes de ativar o J.A.R.V.I.S.
+            Configure sua interface antes de ativar o XAVIER
           </p>
         </div>
 
@@ -126,7 +126,7 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
           </label>
           <div className="flex flex-col gap-2">
             <Toggle
-              label="VOZ DO JARVIS (alto-falantes)"
+              label="VOZ DO XAVIER (alto-falantes)"
               value={prefs.voiceEnabled}
               valueLabel={["ATIVADA", "DESATIVADA"]}
               onClick={() => setPrefs((p) => ({ ...p, voiceEnabled: !p.voiceEnabled }))}
@@ -143,14 +143,14 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
         {/* Tratamento (gênero) */}
         <div className="mb-5">
           <label className="block text-[8px] font-bold mb-2" style={{ color: C.TEXT_MED }}>
-            COMO O JARVIS DEVE TRATAR VOCÊ?
+            COMO O XAVIER DEVE TRATAR VOCÊ?
           </label>
           <div className="flex gap-2">
             <Pill active={prefs.honorific === "senhor"} label="SENHOR" onClick={() => setPrefs((p) => ({ ...p, honorific: "senhor" }))} />
             <Pill active={prefs.honorific === "senhora"} label="SENHORA" onClick={() => setPrefs((p) => ({ ...p, honorific: "senhora" }))} />
           </div>
           <p className="text-[7px] mt-2 leading-relaxed" style={{ color: C.TEXT_DIM }}>
-            O JARVIS aplicará o tratamento escolhido em todas as respostas e na concordância.
+            O XAVIER aplicará o tratamento escolhido em todas as respostas e na concordância.
           </p>
         </div>
 
@@ -161,12 +161,12 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
           </label>
           <div className="flex gap-2">
             <Pill active={prefs.activationMode === "continuous"} label="CONTÍNUA" onClick={() => setPrefs((p) => ({ ...p, activationMode: "continuous" }))} />
-            <Pill active={prefs.activationMode === "wakeword"} label="WAKE-WORD: 'EI JARVIS'" onClick={() => setPrefs((p) => ({ ...p, activationMode: "wakeword" }))} />
+            <Pill active={prefs.activationMode === "wakeword"} label="WAKE-WORD: 'EI XAVIER'" onClick={() => setPrefs((p) => ({ ...p, activationMode: "wakeword" }))} />
           </div>
           <p className="text-[7px] mt-2 leading-relaxed" style={{ color: C.TEXT_DIM }}>
             {prefs.activationMode === "wakeword"
-              ? "O JARVIS só processará comandos que comecem com 'JARVIS' ou 'Ei JARVIS'. Útil em ambientes com conversa de fundo (gabinete, reuniões)."
-              : "Tudo que o microfone captar vai ser enviado ao JARVIS. Recomendado em ambiente silencioso."}
+              ? "O XAVIER só processará comandos que comecem com 'XAVIER' ou 'Ei XAVIER'. Útil em ambientes com conversa de fundo (gabinete, reuniões)."
+              : "Tudo que o microfone captar vai ser enviado ao XAVIER. Recomendado em ambiente silencioso."}
           </p>
         </div>
 
@@ -184,7 +184,7 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
             border: `1px solid ${C.GREEN}`,
           }}
         >
-          ▸ ATIVAR J.A.R.V.I.S.
+          ▸ ATIVAR XAVIER
         </button>
       </div>
     </div>

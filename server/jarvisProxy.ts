@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { getCachedSentiment, setCachedSentiment } from "./grokProxy.js";
 
-export const JARVIS_SYSTEM_PROMPT = `Você é o J.A.R.V.I.S. (Just A Rather Very Intelligent System), assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
+export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
 Idioma:
 - Responda SEMPRE em português brasileiro, mesmo que o usuário escreva em outro idioma.
@@ -720,10 +720,8 @@ interface TtsPayload {
   voiceId?: string;
 }
 
-// JARVIS voice for PT-BR: ElevenLabs "Adam" (deep, calm male) used with the multilingual
-// model so it speaks Brazilian Portuguese naturally. Adam's voice carries the same
-// authoritative-but-warm quality of the original British JARVIS while sounding native in PT-BR.
-// Voz clonada "Hélio Guilherme" do usuário (ElevenLabs cloned voice).
+// Voz padrão do Xavier em PT-BR: voz clonada "Hélio Guilherme" do usuário.
+// Mantemos o voice_id explícito para não cair em uma voz profissional/genérica.
 const DEFAULT_VOICE_ID = "F1W6zKJWyDQD3yKJc4A6";
 
 export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse): Promise<void> {
