@@ -258,3 +258,18 @@ Rotas autenticadas principais:
 | `/api/xavier/memory` | Consulta de resumos e exclusão dos dados operacionais |
 
 A política econômica recomendada é não armazenar áudio ou vídeo bruto, limitar mensagens por mês e usar resumos somente quando necessário. Busca semântica/embeddings poderá ser adicionada posteriormente, mas não faz parte do armazenamento inicial.
+
+
+## Conexão Telegram individual — fluxo híbrido
+
+Cada usuário autenticado pode conectar o próprio bot Telegram em `/telegram-connect`. Na primeira conexão, o token fornecido pelo `@BotFather` é enviado ao backend, validado com `getMe`, cifrado com AES-256-GCM e usado para registrar um webhook exclusivo da conta. O token nunca é devolvido ao navegador.
+
+Depois da validação, o backend configura o nome exibido do bot como **Xavier**, a descrição como **Xavier — Inteligência Soberana** e os comandos básicos `/start`, `/help` e `/settings`. O identificador `@...` continua sendo o username emitido pelo Telegram.
+
+O painel exibe um QR Code que contém somente o link público `https://t.me/<bot_username>`, além dos botões **Abrir no Telegram** e **Copiar link**. O QR Code não contém token, segredo de webhook ou credencial de usuário.
+
+A Bot API e os links profundos utilizados estão documentados nas referências oficiais [1] [2] [3].
+
+[1]: https://core.telegram.org/bots/api "Telegram Bot API"
+[2]: https://core.telegram.org/bots/features "Telegram Bot Features"
+[3]: https://core.telegram.org/api/links "Telegram Deep Links"

@@ -9,6 +9,7 @@ export interface XavierTelegramConnection {
   bot_id: number;
   bot_username?: string | null;
   bot_display_name?: string | null;
+  bot_chat_url?: string | null;
   status: "active" | "disconnected" | "error";
   last_error?: string | null;
   last_verified_at?: string | null;
@@ -92,6 +93,27 @@ async function telegramApi<T>(token: string, method: string, body?: Record<strin
   return data.result as T;
 }
 
+function getTelegramBotChatUrl(username?: string | null): string | null {
+  return username ? `https://t.me/${username}` : null;
+}
+
+async function configureXavierBotProfile(token: string): Promise<void> {
+  await telegramApi(token, "setMyName", { name: "Xavier" });
+  await telegramApi(token, "setMyDescription", {
+    description: "Xavier — Inteligência Soberana para conversar, organizar ideias e agir com você.",
+  });
+  await telegramApi(token, "setMyShortDescription", {
+    short_description: "Inteligência Soberana do Xavier.",
+  });
+  await telegramApi(token, "setMyCommands", {
+    commands: [
+      { command: "start", description: "Iniciar conversa com Xavier" },
+      { command: "help", description: "Ver como usar o Xavier" },
+      { command: "settings", description: "Ver configurações da conta" },
+    ],
+  });
+}
+
 export async function getActiveXavierTelegramConnection(userId: string): Promise<XavierTelegramConnection | null> {
   const params = new URLSearchParams({
     select: "id,user_id,bot_id,bot_username,bot_display_name,status,last_error,last_verified_at,created_at",
@@ -120,6 +142,7 @@ export async function connectXavierTelegram(userId: string, rawToken: string): P
     throw new Error("Token Telegram inválido. Use o token fornecido pelo @BotFather.");
   }
   const bot = await telegramApi<TelegramBot>(token, "getMe");
+  await configureXavierBotProfile(token);
   const connectionId = randomUUID();
   const webhookSecret = randomBytes(32).toString("base64url");
   const insertResponse = await supabaseRequest("xavier_telegram_connections", {
@@ -130,7 +153,7 @@ export async function connectXavierTelegram(userId: string, rawToken: string): P
       user_id: userId,
       bot_id: bot.id,
       bot_username: bot.username || null,
-      bot_display_name: bot.first_name || null,
+      bot_display_name: "Xavier",
       encrypted_bot_token: encryptToken(token),
       webhook_secret_hash: hashWebhookSecret(webhookSecret),
       status: "active",
@@ -168,6 +191,7 @@ export async function connectXavierTelegram(userId: string, rawToken: string): P
     bot_id: inserted[0].bot_id,
     bot_username: inserted[0].bot_username,
     bot_display_name: inserted[0].bot_display_name,
+    bot_chat_url: getTelegramBotChatUrl(inserted[0].bot_username),
     status: "active",
     last_verified_at: new Date().toISOString(),
     created_at: inserted[0].created_at,
@@ -181,9 +205,9 @@ export async function getXavierTelegramStatus(userId: string): Promise<Record<st
   if (!stored) return { connected: false };
   try {
     const webhook = await telegramApi<Record<string, unknown>>(decryptToken(stored.encrypted_bot_token), "getWebhookInfo");
-    return { connected: true, connection, webhook };
+    return { connected: true, connection: { ...connection, bot_chat_url: getTelegramBotChatUrl(connection.bot_username) }, webhook };
   } catch (error) {
-    return { connected: true, connection, webhook: null, error: (error as Error).message };
+    return { connected: true, connection: { ...connection, bot_chat_url: getTelegramBotChatUrl(connection.bot_username) }, webhook: null, error: (error as Error).message };
   }
 }
 
