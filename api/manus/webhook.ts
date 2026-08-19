@@ -105,8 +105,22 @@ async function deliverTelegramResult(task: Awaited<ReturnType<typeof applyManusW
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+  if (req.method === "HEAD") {
+    res.setHeader("Allow", "GET, HEAD, OPTIONS, POST");
+    res.status(200).end();
+    return;
+  }
+  if (req.method === "GET") {
+    res.status(200).json({ ok: true, verification: true });
+    return;
+  }
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", "GET, HEAD, OPTIONS, POST");
+    res.status(204).end();
+    return;
+  }
   if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
+    res.setHeader("Allow", "GET, HEAD, OPTIONS, POST");
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
