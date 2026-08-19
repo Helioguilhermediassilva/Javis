@@ -50,3 +50,18 @@ A verificação oficial usa `X-Webhook-Signature` e `X-Webhook-Timestamp`, rejei
 
 Referências oficiais: https://open.manus.ai/docs/v2/task.create, https://open.manus.ai/docs/v2/task.sendMessage, https://open.manus.ai/docs/v2/webhook.create, https://open.manus.ai/docs/v2/webhooks-overview e https://open.manus.ai/docs/v2/webhooks-security.
 
+## Deployment do commit d83dc29
+
+O commit `d83dc29` foi enviado para `Helioguilhermediassilva/Javis` e recebeu status `success` nos dois checks Vercel associados ao repositório:
+
+- `Vercel – javis`: https://vercel.com/nowgo/javis/A7g8U2A7npWVziqfQqSbrMDPakTL
+- `Vercel – javis-deploy`: https://vercel.com/nowgo-e7470b8c/javis-deploy/8YuMwgjr8Q8CAG5YQgbs8FPdhd7C
+
+A listagem geral da equipe também mostrou um projeto `jarvis-now-go-ai` conectado a outro repositório (`Jarvis_NowGo_AI`), que não deve ser usado para esta entrega.
+
+## Ativação em produção
+
+A integração foi implementada de forma inerte quando `MANUS_API_KEY` não existe: o Xavier mantém o Grok como caminho padrão e não tenta chamadas externas Manus. Para ativar tarefas agentic em produção, configurar no projeto Vercel `javis` a variável privada `MANUS_API_KEY` em Production, Preview e Development conforme necessário. O valor deve ser inserido diretamente no painel Vercel e nunca no código, no GitHub, no Supabase ou no frontend.
+
+Depois da variável estar ativa, registrar no painel/API da Manus o callback público `https://jarvisnowgo.com/api/manus/webhook`. O endpoint já valida `X-Webhook-Signature` e `X-Webhook-Timestamp`, rejeita timestamps antigos e atualiza a tarefa de modo idempotente. O webhook deve apontar para o projeto `javis`, não para o projeto Vercel `jarvis-now-go-ai` conectado ao repositório diferente `Jarvis_NowGo_AI`.
+
