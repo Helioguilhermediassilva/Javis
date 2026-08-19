@@ -1,9 +1,16 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { generateJarvisReply, JARVIS_SYSTEM_PROMPT, JarvisChatError, type ChatPayload } from "../../server/jarvisProxy.js";
-import { appendClaudeCitations, generateClaudeReply, isClaudeConfigured, shouldUseClaudeTask } from "../../server/xavierClaude.js";
+import {
+  appendClaudeCitations,
+  generateClaudeReply,
+  isClaudeConfigured,
+  type ClaudeHistoryMessage,
+  XAVIER_CLAUDE_SYSTEM_PROMPT,
+} from "../../server/xavierClaude.js";
 import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegramHistory.js";
 import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../server/telegramAudio.js";
 import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
+import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
+import { isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
 import {
   decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
@@ -12,7 +19,6 @@ import {
   sendXavierTelegramTyping,
   verifyXavierTelegramWebhookSecret,
 } from "../../server/xavierTelegram.js";
-import { isPdfTaskRequest } from "../../server/xavierManus.js";
 import {
   appendXavierMessage,
   consumeXavierMessageQuota,
@@ -90,35 +96,55 @@ async function sendLegacyTelegramText(chatId: string, text: string): Promise<voi
   }
 }
 
+async function generateClaudeArtifactContent(input: {
+  kind: "pdf" | "presentation";
+  requestText: string;
+  history: ClaudeHistoryMessage[];
+}): Promise<{ content: string; model: string; toolsUsed: string[] }> {
+  const artifactInstruction = input.kind === "pdf"
+    ? "Prepare o conteúdo completo para um documento PDF em português. Não explique limitações e não diga que não pode gerar arquivos; escreva diretamente o conteúdo solicitado, com título e seções claras quando fizer sentido."
+    : "Crie uma apresentação profissional e editável em português. Responda estritamente em Markdown: comece com '# título geral'; depois, para cada slide, use '## Slide N: título curto' seguido por 2 a 4 bullets concisos. Inclua capa, contexto, pontos principais, recomendações e próximos passos quando fizer sentido. Não escreva texto fora dessa estrutura e não diga que não pode gerar arquivos.";
+  const result = await generateClaudeReply({
+    history: input.history,
+    systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+    userMessage: `${artifactInstruction}\n\nPedido original: ${input.requestText}`,
+    useWebSearch: shouldUseWebSearchForRequest(input.requestText),
+    maxTokens: 8_000,
+  });
+  return {
+    content: appendClaudeCitations(result.reply, result.citations),
+    model: result.model,
+    toolsUsed: result.tools_used,
+  };
+}
+
 async function createLocalXavierPdf(input: {
   userId: string;
   taskId: string;
   requestText: string;
-  history: ChatPayload["history"];
+  history: ClaudeHistoryMessage[];
 }): Promise<{ file_name: string; url: string; size_bytes: number }> {
-  const pdfPrompt = `Prepare o conteúdo completo para um documento PDF em português. Não explique limitações e não diga que não pode gerar arquivos; escreva diretamente o conteúdo solicitado, com título e seções claras quando fizer sentido. Pedido original: ${input.requestText}`;
-  let content: string;
-  if (isClaudeConfigured()) {
-    const result = await generateClaudeReply({
-      history: input.history,
-      systemPrompt: JARVIS_SYSTEM_PROMPT,
-      userMessage: pdfPrompt,
-      useWebSearch: false,
-      maxTokens: 8_000,
-    });
-    content = appendClaudeCitations(result.reply, result.citations);
-  } else {
-    content = (await generateJarvisReply({
-      history: input.history,
-      userMessage: pdfPrompt,
-      honorific: "senhor",
-    })).reply;
-  }
+  const generated = await generateClaudeArtifactContent({ kind: "pdf", requestText: input.requestText, history: input.history });
   return createXavierPdfAttachment({
     userId: input.userId,
     taskId: input.taskId,
     title: "Documento solicitado ao Xavier",
-    body: content,
+    body: generated.content,
+  });
+}
+
+async function createLocalXavierPresentation(input: {
+  userId: string;
+  taskId: string;
+  requestText: string;
+  history: ClaudeHistoryMessage[];
+}): Promise<{ file_name: string; url: string; size_bytes: number }> {
+  const generated = await generateClaudeArtifactContent({ kind: "presentation", requestText: input.requestText, history: input.history });
+  return createXavierPresentationAttachment({
+    userId: input.userId,
+    taskId: input.taskId,
+    title: "Apresentação solicitada ao Xavier",
+    outline: generated.content,
   });
 }
 
@@ -201,39 +227,30 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
       return;
     }
 
-    const claudeTask = shouldUseClaudeTask(text, "auto");
-    if (claudeTask && isClaudeConfigured() && !isPdfTaskRequest(text)) {
-      const result = await generateClaudeReply({
-        history: previousHistory,
-        systemPrompt: JARVIS_SYSTEM_PROMPT,
-        userMessage: text,
-        useWebSearch: true,
-      });
-      const reply = appendClaudeCitations(result.reply, result.citations);
-      await appendXavierMessage({
-        userId: connection.user_id,
-        conversationId: conversation.id,
-        channel: "telegram",
-        role: "assistant",
-        content: reply,
-        telegramMessageId: message.message_id,
-      });
-      await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
-        console.warn("[xavier-memory] Claude maintenance failed", (error as Error).message);
-      });
-      await sendXavierTelegramMessage(connection, chatId, reply);
-      json(res, 200, { ok: true, executor: "claude", tools_used: result.tools_used, citations: result.citations, model: result.model });
+    if (!isClaudeConfigured()) {
+      await sendXavierTelegramMessage(connection, chatId, "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
+      json(res, 200, { ok: true, error: "claude_not_configured" });
       return;
     }
 
-    if (isPdfTaskRequest(text)) {
-      const attachment = await createLocalXavierPdf({
-        userId: connection.user_id,
-        taskId: `telegram-${connection.id}-${message.message_id}`,
-        requestText: text,
-        history: previousHistory,
-      });
-      const reply = `Preparei o PDF solicitado e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
+    const requestIsPdf = isPdfTaskRequest(text);
+    const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
+    if (requestIsPdf || requestIsPresentation) {
+      const attachment = requestIsPdf
+        ? await createLocalXavierPdf({
+          userId: connection.user_id,
+          taskId: `telegram-${connection.id}-${message.message_id}`,
+          requestText: text,
+          history: previousHistory,
+        })
+        : await createLocalXavierPresentation({
+          userId: connection.user_id,
+          taskId: `telegram-${connection.id}-${message.message_id}`,
+          requestText: text,
+          history: previousHistory,
+        });
+      const kind = requestIsPdf ? "PDF" : "apresentação editável";
+      const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendXavierMessage({
         userId: connection.user_id,
         conversationId: conversation.id,
@@ -243,31 +260,36 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
         telegramMessageId: message.message_id,
       });
       await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
-        console.warn("[xavier-memory] Telegram PDF maintenance failed", (error as Error).message);
+        console.warn("[xavier-memory] Telegram artifact maintenance failed", (error as Error).message);
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
       await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`);
-      json(res, 200, { ok: true, local_pdf: true, attachment });
+      json(res, 200, { ok: true, executor: "claude", local_artifact: requestIsPdf ? "pdf" : "presentation", attachment });
       return;
     }
 
-    const payload: ChatPayload = { history: previousHistory, userMessage: text, honorific: "senhor" };
-    const result = await generateJarvisReply(payload);
+    const result = await generateClaudeReply({
+      history: previousHistory,
+      systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+      userMessage: text,
+      useWebSearch: shouldUseWebSearchForRequest(text),
+    });
+    const reply = appendClaudeCitations(result.reply, result.citations);
     await appendXavierMessage({
       userId: connection.user_id,
       conversationId: conversation.id,
       channel: "telegram",
       role: "assistant",
-      content: result.reply,
+      content: reply,
       telegramMessageId: message.message_id,
     });
     await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
-      console.warn("[xavier-memory] Telegram maintenance failed", (error as Error).message);
+      console.warn("[xavier-memory] Telegram Claude maintenance failed", (error as Error).message);
     });
-    await sendXavierTelegramMessage(connection, chatId, result.reply);
-    json(res, 200, { ok: true });
+    await sendXavierTelegramMessage(connection, chatId, reply);
+    json(res, 200, { ok: true, executor: "claude", tools_used: result.tools_used, citations: result.citations, model: result.model });
   } catch (error) {
-    const messageText = error instanceof JarvisChatError ? error.message : (error as Error).message;
+    const messageText = (error as Error).message;
     console.error("[telegram:xavier] webhook error", { connectionId, updateId: update.update_id, error: messageText });
     const fallback = audio
       ? "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida."
@@ -311,40 +333,49 @@ async function handleLegacyWebhook(req: VercelRequest, res: VercelResponse): Pro
     const previousHistory = await loadTelegramHistory(chatId, 20);
     const inserted = await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "user", content: text, telegramMessageId: message.message_id, telegramUpdateId: update.update_id });
     if (!inserted) { json(res, 200, { ok: true, duplicate: true }); return; }
-    const claudeTask = shouldUseClaudeTask(text, "auto");
-    if (claudeTask && isClaudeConfigured() && !isPdfTaskRequest(text)) {
-      const result = await generateClaudeReply({
-        history: previousHistory,
-        systemPrompt: JARVIS_SYSTEM_PROMPT,
-        userMessage: text,
-        useWebSearch: true,
-      });
-      const reply = appendClaudeCitations(result.reply, result.citations);
-      await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
-      await sendLegacyTelegramText(chatId, reply);
-      json(res, 200, { ok: true, executor: "claude", tools_used: result.tools_used, citations: result.citations, model: result.model });
+    if (!isClaudeConfigured()) {
+      await sendLegacyTelegramText(chatId, "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
+      json(res, 200, { ok: true, error: "claude_not_configured" });
       return;
     }
-    if (isPdfTaskRequest(text)) {
-      const attachment = await createLocalXavierPdf({
-        userId: `legacy-${chatId}`,
-        taskId: `telegram-${chatId}-${message.message_id}`,
-        requestText: text,
-        history: previousHistory,
-      });
-      const reply = `Preparei o PDF solicitado e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
+
+    const requestIsPdf = isPdfTaskRequest(text);
+    const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
+    if (requestIsPdf || requestIsPresentation) {
+      const attachment = requestIsPdf
+        ? await createLocalXavierPdf({
+          userId: `legacy-${chatId}`,
+          taskId: `telegram-${chatId}-${message.message_id}`,
+          requestText: text,
+          history: previousHistory,
+        })
+        : await createLocalXavierPresentation({
+          userId: `legacy-${chatId}`,
+          taskId: `telegram-${chatId}-${message.message_id}`,
+          requestText: text,
+          history: previousHistory,
+        });
+      const kind = requestIsPdf ? "PDF" : "apresentação editável";
+      const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
       await sendLegacyTelegramText(chatId, reply);
       await legacyTelegramApi("sendDocument", { chat_id: chatId, document: attachment.url, caption: `Arquivo gerado pelo Xavier: ${attachment.file_name}` });
-      json(res, 200, { ok: true, local_pdf: true, attachment });
+      json(res, 200, { ok: true, executor: "claude", local_artifact: requestIsPdf ? "pdf" : "presentation", attachment });
       return;
     }
-    const result = await generateJarvisReply({ history: previousHistory, userMessage: text, honorific: "senhor" });
-    await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: result.reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
-    await sendLegacyTelegramText(chatId, result.reply);
-    json(res, 200, { ok: true });
+
+    const result = await generateClaudeReply({
+      history: previousHistory,
+      systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+      userMessage: text,
+      useWebSearch: shouldUseWebSearchForRequest(text),
+    });
+    const reply = appendClaudeCitations(result.reply, result.citations);
+    await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
+    await sendLegacyTelegramText(chatId, reply);
+    json(res, 200, { ok: true, executor: "claude", tools_used: result.tools_used, citations: result.citations, model: result.model });
   } catch (error) {
-    const messageText = error instanceof JarvisChatError ? error.message : (error as Error).message;
+    const messageText = (error as Error).message;
     console.error("[telegram] webhook error", { updateId: update.update_id, error: messageText });
     const fallback = audio
       ? "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida."
