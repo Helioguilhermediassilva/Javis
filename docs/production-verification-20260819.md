@@ -10,3 +10,9 @@ A listagem MCP da equipe retornou apenas o projeto `jarvis-now-go-ai`, portanto 
 
 ## Deployment final — 19/08/2026
 Após o push do commit `221b983`, o projeto Vercel `javis` exibiu o deployment de produção `javis-1byuyzhbs-nowgo.vercel.app` como `Ready`, associado ao commit `221b983` da branch `main`. O domínio público `https://jarvisnowgo.com/` respondeu com o título `Xavier — NowGo AI`. A página inicial permaneceu visualmente escura durante a verificação automatizada, mas o documento HTML e o título da aplicação foram entregues pelo domínio.
+
+## Correção de apresentações no Telegram
+
+O commit `29d11e9` foi publicado na branch `main` do repositório `Helioguilhermediassilva/Javis`. O projeto Vercel `javis` iniciou o deployment de Production `javis-oezn26qcw-nowgo.vercel.app`; na primeira verificação visual, o status estava `Building`. A implementação local foi validada com `pnpm check`, 18 testes determinísticos e `pnpm build`.
+
+A verificação seguinte confirmou o deployment `javis-oezn26qcw-nowgo.vercel.app` como `Ready`, associado ao commit `29d11e9` e à branch `main`.
