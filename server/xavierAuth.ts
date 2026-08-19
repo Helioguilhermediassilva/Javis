@@ -2,9 +2,15 @@ import type { IncomingMessage } from "node:http";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 
-function getServiceKey(): string {
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || "";
-  if (!key) throw new XavierAuthError(500, "SUPABASE_SERVICE_ROLE_KEY não configurada");
+function getAuthApiKey(): string {
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY
+    || process.env.SUPABASE_ANON_KEY
+    || process.env.VITE_SUPABASE_PUBLISHABLE_KEY
+    || process.env.VITE_SUPABASE_ANON_KEY
+    || process.env.SUPABASE_SERVICE_ROLE_KEY
+    || process.env.SUPABASE_SECRET_KEY
+    || "";
+  if (!key) throw new XavierAuthError(500, "Chave pública do Supabase não configurada");
   return key;
 }
 
@@ -34,7 +40,9 @@ export async function requireXavierUser(req: IncomingMessage): Promise<XavierUse
   const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
     method: "GET",
     headers: {
-      apikey: getServiceKey(),
+      // A chave pública identifica a aplicação; o Bearer identifica o usuário.
+      // A service role permanece reservada para operações administrativas do backend.
+      apikey: getAuthApiKey(),
       Authorization: `Bearer ${accessToken}`,
     },
     signal: AbortSignal.timeout(8_000),
@@ -42,8 +50,10 @@ export async function requireXavierUser(req: IncomingMessage): Promise<XavierUse
 
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
+      console.warn("Xavier auth rejected access token", { status: response.status });
       throw new XavierAuthError(401, "Sessão inválida ou expirada");
     }
+    console.error("Xavier auth validation failed", { status: response.status });
     throw new XavierAuthError(502, `Falha ao validar sessão (${response.status})`);
   }
 
