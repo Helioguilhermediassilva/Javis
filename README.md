@@ -9,7 +9,7 @@
 
 ## Visão geral
 
-O JARVIS é um cockpit conversacional pensado para tomadores de decisão do Distrito Federal — em particular o Palácio do Buriti, secretarias e gabinetes parlamentares — que precisam de respostas rápidas, fundamentadas em dados oficiais, sobre o que está acontecendo na cidade. O usuário fala (ou digita) em português brasileiro, o sistema entende a intenção, consulta as bases conectadas, agrega o que está sendo dito nas redes sobre o tema e responde em voz natural enquanto a interface ainda está renderizando o texto.
+O XAVIER é um cockpit conversacional pensado para tomadores de decisão do Distrito Federal — em particular o Palácio do Buriti, secretarias e gabinetes parlamentares — que precisam de respostas rápidas, fundamentadas em dados oficiais, sobre o que está acontecendo na cidade. O usuário fala (ou digita) em português brasileiro, o sistema entende a intenção, consulta as bases conectadas, agrega o que está sendo dito nas redes sobre o tema e responde em voz natural enquanto a interface ainda está renderizando o texto.
 
 Quatro elementos estruturais sustentam o produto:
 
