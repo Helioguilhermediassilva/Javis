@@ -1,7 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { generateJarvisReply, JarvisChatError, type ChatPayload } from "../../server/jarvisProxy.js";
 import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegramHistory.js";
+import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../server/telegramAudio.js";
 import {
+  decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
   sendXavierTelegramMessage,
   verifyXavierTelegramWebhookSecret,
@@ -19,7 +21,17 @@ export const config = { maxDuration: 60 };
 
 interface TelegramChat { id: number; }
 interface TelegramUser { id: number; username?: string; is_bot?: boolean; }
-interface TelegramMessage { message_id: number; from?: TelegramUser; chat: TelegramChat; text?: string; }
+interface TelegramMedia { file_id?: string; file_size?: number; mime_type?: string; file_name?: string; }
+interface TelegramMessage {
+  message_id: number;
+  from?: TelegramUser;
+  chat: TelegramChat;
+  text?: string;
+  caption?: string;
+  voice?: TelegramMedia;
+  audio?: TelegramMedia;
+  document?: TelegramMedia;
+}
 interface TelegramUpdate { update_id?: number; message?: TelegramMessage; }
 
 function getHeader(req: VercelRequest, name: string): string {
@@ -96,14 +108,25 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
   const update = isTelegramUpdate(req.body) ? req.body : {};
   const message = update.message;
   const chatId = message?.chat?.id != null ? String(message.chat.id) : "";
-  const text = typeof message?.text === "string" ? message.text.trim().slice(0, 4000) : "";
+  const caption = typeof message?.caption === "string" ? message.caption.trim().slice(0, 1000) : "";
+  const audio = extractTelegramAudioReference(message);
+  let text = typeof message?.text === "string" ? message.text.trim().slice(0, 4000) : caption;
   const telegramUser = message?.from;
-  if (!chatId || !message || telegramUser?.is_bot || !text) {
+  if (!chatId || !message || telegramUser?.is_bot || (!text && !audio)) {
     json(res, 200, { ok: true, ignored: true });
     return;
   }
 
   try {
+    if (audio) {
+      const transcription = await transcribeTelegramAudio(decryptXavierTelegramToken(connection), audio);
+      text = text ? `${text}\n\n[Áudio transcrito]\n${transcription}` : transcription;
+    }
+    if (!text) {
+      await sendXavierTelegramMessage(connection, chatId, "Senhor, não consegui identificar conteúdo nesse áudio. Tente enviar uma gravação mais nítida.");
+      json(res, 200, { ok: true, ignored: true });
+      return;
+    }
     const profile = await getXavierProfile(connection.user_id);
     const allowed = await consumeXavierMessageQuota(connection.user_id, profile.monthly_message_limit);
     if (!allowed) {
@@ -156,7 +179,10 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
   } catch (error) {
     const messageText = error instanceof JarvisChatError ? error.message : (error as Error).message;
     console.error("[telegram:xavier] webhook error", { connectionId, updateId: update.update_id, error: messageText });
-    try { await sendXavierTelegramMessage(connection, chatId, "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes."); } catch (sendError) { console.error("[telegram:xavier] error notification failed", (sendError as Error).message); }
+    const fallback = audio
+      ? "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida."
+      : "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes.";
+    try { await sendXavierTelegramMessage(connection, chatId, fallback); } catch (sendError) { console.error("[telegram:xavier] error notification failed", (sendError as Error).message); }
     json(res, 200, { ok: true, error: "processing_failed" });
   }
 }
@@ -169,14 +195,26 @@ async function handleLegacyWebhook(req: VercelRequest, res: VercelResponse): Pro
   const update = isTelegramUpdate(req.body) ? req.body : {};
   const message = update.message;
   const chatId = message?.chat?.id != null ? String(message.chat.id) : "";
-  const text = typeof message?.text === "string" ? message.text.trim().slice(0, 4000) : "";
+  const caption = typeof message?.caption === "string" ? message.caption.trim().slice(0, 1000) : "";
+  const audio = extractTelegramAudioReference(message);
+  let text = typeof message?.text === "string" ? message.text.trim().slice(0, 4000) : caption;
   const telegramUser = message?.from;
-  if (!chatId || !message || telegramUser?.is_bot || !text) { json(res, 200, { ok: true, ignored: true }); return; }
+  if (!chatId || !message || telegramUser?.is_bot || (!text && !audio)) { json(res, 200, { ok: true, ignored: true }); return; }
 
   const allowed = allowedChatIds();
   if (allowed && !allowed.has(chatId)) { console.warn("[telegram] chat bloqueado", chatId); json(res, 200, { ok: true, ignored: true }); return; }
 
   try {
+    if (audio) {
+      text = text
+        ? `${text}\n\n[Áudio transcrito]\n${await transcribeTelegramAudio(process.env.TELEGRAM_BOT_TOKEN || "", audio)}`
+        : await transcribeTelegramAudio(process.env.TELEGRAM_BOT_TOKEN || "", audio);
+    }
+    if (!text) {
+      await sendLegacyTelegramText(chatId, "Senhor, não consegui identificar conteúdo nesse áudio. Tente enviar uma gravação mais nítida.");
+      json(res, 200, { ok: true, ignored: true });
+      return;
+    }
     const previousHistory = await loadTelegramHistory(chatId, 20);
     const inserted = await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "user", content: text, telegramMessageId: message.message_id, telegramUpdateId: update.update_id });
     if (!inserted) { json(res, 200, { ok: true, duplicate: true }); return; }
@@ -187,7 +225,10 @@ async function handleLegacyWebhook(req: VercelRequest, res: VercelResponse): Pro
   } catch (error) {
     const messageText = error instanceof JarvisChatError ? error.message : (error as Error).message;
     console.error("[telegram] webhook error", { updateId: update.update_id, error: messageText });
-    try { await sendLegacyTelegramText(chatId, "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes."); } catch (sendError) { console.error("[telegram] error notification failed", (sendError as Error).message); }
+    const fallback = audio
+      ? "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida."
+      : "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes.";
+    try { await sendLegacyTelegramText(chatId, fallback); } catch (sendError) { console.error("[telegram] error notification failed", (sendError as Error).message); }
     json(res, 200, { ok: true, error: "processing_failed" });
   }
 }
