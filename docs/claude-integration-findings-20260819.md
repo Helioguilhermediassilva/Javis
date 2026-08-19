@@ -37,3 +37,12 @@ A documentação oficial da Anthropic confirma que a Messages API pode usar uma 
 
 Fonte: https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool
 Fonte: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
+
+
+## Publicação da migração Claude
+
+O commit `d83b224` (`feat: replace Manus executor with Claude`) foi publicado na branch `main` do repositório `Helioguilhermediassilva/Javis`. O projeto Vercel `javis` exibiu o deployment de Production `javis-hgxwmamrv-nowgo.vercel.app` como `Ready` em 19/08/2026. O valor de `ANTHROPIC_API_KEY` não foi visualizado nem registrado.
+
+Deployment: https://vercel.com/nowgo/javis/4g39iZc3GJAqMUpX1hRKxf7DTtG1
+URL temporária: https://javis-hgxwmamrv-nowgo.vercel.app
+Repositório: https://github.com/Helioguilhermediassilva/Javis/commit/d83b2245c72becbb45235f9818321fcb05b657f2
