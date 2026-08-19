@@ -10,6 +10,8 @@ import { useElevenLabsTTS } from "@/hooks/useElevenLabsTTS";
 import { jarvisChatStream, fileToAttachment, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
 import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
+import { Link } from "wouter";
+import { useAuth } from "@/contexts/AuthContext";
 
 const C = {
   BG: "#00060a",
@@ -63,6 +65,7 @@ function useSimulatedMetrics() {
 }
 
 export default function Home() {
+  const { user, signOut } = useAuth();
   const [hudState, setHudState] = useState<HudState>("INITIALISING");
   const [muted, setMuted] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
@@ -373,12 +376,22 @@ export default function Home() {
             Sistema Inteligente Operacional · NowGo AI
           </div>
         </div>
-        <div className="text-right">
-          <div className="text-[14px] font-bold tabular-nums" style={{ color: C.PRI }}>
-            {clock}
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <div className="text-[14px] font-bold tabular-nums" style={{ color: C.PRI }}>
+              {clock}
+            </div>
+            <div className="text-[7px]" style={{ color: C.TEXT_DIM }}>
+              {date}
+            </div>
           </div>
-          <div className="text-[7px]" style={{ color: C.TEXT_DIM }}>
-            {date}
+          <div className="flex items-center gap-1.5">
+            <Link href="/telegram-connect" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
+              TELEGRAM
+            </Link>
+            <button type="button" onClick={() => void signOut()} className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_DIM }} title={user?.email || "Encerrar sessão"}>
+              SAIR
+            </button>
           </div>
         </div>
       </header>

@@ -2,14 +2,35 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/NotFound";
 import { Route, Switch } from "wouter";
+import type React from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
+import Login from "./pages/Login";
+import TelegramConnect from "./pages/TelegramConnect";
+
+function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
+  const { loading, user } = useAuth();
+  if (loading) {
+    return <div className="flex min-h-screen items-center justify-center bg-[#00060a] text-xs tracking-[0.3em] text-[#00d4ff]">XAVIER / VALIDANDO SESSÃO</div>;
+  }
+  return user ? <>{children}</> : <Login />;
+}
+
+function ProtectedHome() {
+  return <AuthenticatedRoute><Home /></AuthenticatedRoute>;
+}
+
+function ProtectedTelegramConnect() {
+  return <AuthenticatedRoute><TelegramConnect /></AuthenticatedRoute>;
+}
 
 function Router() {
   return (
     <Switch>
-      <Route path={"/"} component={Home} />
+      <Route path={"/"} component={ProtectedHome} />
+      <Route path={"/telegram-connect"} component={ProtectedTelegramConnect} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
@@ -22,7 +43,9 @@ function App() {
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <AuthProvider>
+            <Router />
+          </AuthProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>

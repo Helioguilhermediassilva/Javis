@@ -1,6 +1,14 @@
 // Client for calling the JARVIS chat proxy at /api/jarvis/chat.
 // O servidor usa LLM_API_KEY (somente server-side) para chamar o LLM.
 
+import { requireSupabase } from "@/lib/supabase";
+
+async function authenticatedHeaders(extra: Record<string, string> = {}): Promise<Record<string, string>> {
+  const { data, error } = await requireSupabase().auth.getSession();
+  if (error || !data.session?.access_token) throw new Error("Sessão do Xavier ausente ou expirada. Entre novamente.");
+  return { ...extra, Authorization: `Bearer ${data.session.access_token}` };
+}
+
 export type ChatRole = "system" | "user" | "assistant";
 export interface ChatMessage {
   role: ChatRole;
@@ -52,7 +60,7 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
   const resp = await fetch("/api/jarvis/chat/stream", {
     method: "POST",
     signal,
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    headers: await authenticatedHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
     body: JSON.stringify({ history, userMessage, attachments, honorific }),
   });
   if (!resp.ok || !resp.body) {
@@ -147,7 +155,7 @@ export async function jarvisChat({ history, userMessage, attachments, honorific,
   const resp = await fetch("/api/jarvis/chat", {
     method: "POST",
     signal,
-    headers: { "Content-Type": "application/json" },
+    headers: await authenticatedHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ history, userMessage, attachments, honorific }),
   });
 

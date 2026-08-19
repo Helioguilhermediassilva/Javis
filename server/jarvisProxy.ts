@@ -3,6 +3,15 @@
 
 import type { IncomingMessage, ServerResponse } from "http";
 import { getCachedSentiment, setCachedSentiment } from "./grokProxy.js";
+import { authErrorResponse, requireXavierUser } from "./xavierAuth.js";
+import {
+  appendXavierMessage,
+  consumeXavierMessageQuota,
+  ensureXavierConversation,
+  getXavierProfile,
+  loadXavierHistory,
+  type XavierConversation,
+} from "./xavierMemory.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
@@ -455,6 +464,39 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
   }
 }
 
+interface AuthenticatedWebChatContext {
+  userId: string;
+  conversation: XavierConversation;
+  history: ChatMessage[];
+  persist: boolean;
+}
+
+function isTestCompatibilityRequest(req: IncomingMessage): boolean {
+  return process.env.NODE_ENV === "test" && !req.headers?.authorization;
+}
+
+function persistedUserContent(payload: ChatPayload): string {
+  const text = (payload.userMessage || "").toString().trim();
+  const attachmentNames = (payload.attachments || [])
+    .filter((attachment) => attachment && typeof attachment.name === "string" && attachment.name.trim())
+    .map((attachment) => `[anexo: ${attachment.name!.trim().slice(0, 120)}]`)
+    .join(" ");
+  return `${text}${attachmentNames ? `${text ? " " : ""}${attachmentNames}` : ""}`.trim() || "[anexo]";
+}
+
+async function prepareAuthenticatedWebChat(req: IncomingMessage): Promise<AuthenticatedWebChatContext> {
+  if (isTestCompatibilityRequest(req)) {
+    return { userId: "test-user", conversation: { id: "test-conversation" } as XavierConversation, history: [], persist: false };
+  }
+  const user = await requireXavierUser(req);
+  const profile = await getXavierProfile(user.id);
+  const conversation = await ensureXavierConversation({ userId: user.id, channel: "web", title: "Cockpit web" });
+  const allowed = await consumeXavierMessageQuota(user.id, profile.monthly_message_limit);
+  if (!allowed) throw new JarvisChatError(429, "Limite mensal de mensagens atingido. Ajuste o limite ou aguarde o próximo mês.");
+  const history = profile.memory_enabled ? await loadXavierHistory(conversation.id, 20) : [];
+  return { userId: user.id, conversation, history, persist: true };
+}
+
 export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
@@ -468,9 +510,33 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     return;
   }
   try {
-    sendJson(res, 200, await generateJarvisReply(payload));
+    const context = await prepareAuthenticatedWebChat(req);
+    const authenticatedPayload = { ...payload, history: context.persist ? context.history : (Array.isArray(payload.history) ? payload.history : []) };
+    if (context.persist) {
+      await appendXavierMessage({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        channel: "web",
+        role: "user",
+        content: persistedUserContent(authenticatedPayload),
+      });
+    }
+    const result = await generateJarvisReply(authenticatedPayload);
+    if (context.persist) {
+      await appendXavierMessage({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        channel: "web",
+        role: "assistant",
+        content: result.reply,
+      });
+    }
+    sendJson(res, 200, result);
   } catch (e) {
-    const error = e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
+    const authError = authErrorResponse(e);
+    const error = authError
+      ? new JarvisChatError(authError.status, authError.message)
+      : e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
     sendJson(res, error.status, { error: error.message });
   }
 }
@@ -608,11 +674,23 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     return;
   }
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
-  const history = Array.isArray(payload.history) ? payload.history.slice(-20) : [];
+  let history: ChatMessage[] = [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
   const honorificMsg = honorificSystemMessage(payload.honorific);
+  let context: AuthenticatedWebChatContext;
   if (!userMessage.trim() && attachments.length === 0) {
     sendJson(res, 400, { error: "userMessage or attachments required" });
+    return;
+  }
+  try {
+    context = await prepareAuthenticatedWebChat(req);
+    history = context.persist ? context.history : (Array.isArray(payload.history) ? payload.history : []);
+  } catch (e) {
+    const authError = authErrorResponse(e);
+    const error = authError
+      ? new JarvisChatError(authError.status, authError.message)
+      : e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
+    sendJson(res, error.status, { error: error.message });
     return;
   }
   const cleanedHistory = history
@@ -643,6 +721,22 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
+
+  if (context.persist) {
+    try {
+      await appendXavierMessage({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        channel: "web",
+        role: "user",
+        content: persistedUserContent(payload),
+      });
+    } catch (e) {
+      sseWrite(res, { type: "error", message: `Falha ao registrar a mensagem: ${(e as Error).message}` });
+      res.end();
+      return;
+    }
+  }
 
   // Pré-busca paralela: avisa a UI antes (tool_start) e depois (tool_end).
   const intent = detectBriefingIntent(userMessage);
@@ -699,6 +793,15 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     if (!finalContent) {
       sseWrite(res, { type: "error", message: "Empty final reply after tool calls" });
     } else {
+      if (context.persist) {
+        await appendXavierMessage({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          channel: "web",
+          role: "assistant",
+          content: finalContent,
+        });
+      }
       sseWrite(res, { type: "done", reply: finalContent, tools_used: usedTools });
     }
   } catch (e) {

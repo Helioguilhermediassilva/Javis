@@ -171,31 +171,29 @@ Todas confidenciais — devem ser cadastradas no painel do Vercel (em *Project S
 | `ELEVENLABS_API_KEY` | Servidor — *streaming* TTS da voz clonada | **Sim** |
 | `LLM_API_URL` | Servidor — base URL alternativa para um *gateway* de LLM próprio. Quando ausente, o JARVIS chama `https://api.x.ai` diretamente | Não |
 | `LLM_API_KEY` | Servidor — chave do *gateway* citado acima. Quando ausente, o JARVIS reaproveita automaticamente `XAI_API_KEY` | Não |
-| `TELEGRAM_BOT_TOKEN` | Webhook — token do bot criado pelo @BotFather | Para Telegram |
-| `TELEGRAM_WEBHOOK_SECRET` | Webhook — segredo enviado no cabeçalho de cada atualização | Para Telegram |
-| `TELEGRAM_ALLOWED_CHAT_IDS` | Webhook — lista opcional de `chat_id` autorizados, separados por vírgula | Não |
-| `SUPABASE_URL` | Backend — URL do projeto `Cockpit_NowGo` | Para Telegram |
-| `SUPABASE_SERVICE_ROLE_KEY` | Backend — chave privada para a tabela do histórico, nunca exposta ao cliente | Para Telegram |
+| `TELEGRAM_BOT_TOKEN` | Servidor — bot compartilhado legado, mantido para compatibilidade | Opcional |
+| `TELEGRAM_WEBHOOK_SECRET` | Servidor — segredo do webhook legado | Opcional |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | Webhook legado — lista opcional de `chat_id` autorizados | Não |
+| `SUPABASE_URL` | Backend — URL do projeto `Cockpit_NowGo` | **Sim** para contas/memória |
+| `SUPABASE_SERVICE_ROLE_KEY` | Backend — chave privada para tabelas Xavier; nunca exposta ao cliente | **Sim** para contas/memória |
+| `VITE_SUPABASE_URL` | Frontend — URL pública usada pelo Supabase Auth | **Sim** para login |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Frontend — chave pública do Supabase Auth; não é chave administrativa | **Sim** para login |
+| `XAVIER_ENCRYPTION_KEY` | Backend — segredo privado para cifrar tokens Telegram por conta | **Sim** para Telegram individual |
+| `XAVIER_TELEGRAM_WEBHOOK_BASE_URL` | Backend — base pública do webhook individual | Não; usa `jarvisnowgo.com` |
 
-> Em produção, a interface web funciona com `XAI_API_KEY` e `ELEVENLABS_API_KEY`. Para ativar o Telegram, acrescente as cinco variáveis `TELEGRAM_*` e `SUPABASE_*` indicadas acima. O par `LLM_API_URL` / `LLM_API_KEY` só é útil para quem quiser intermediar o tráfego do Grok por um *gateway* corporativo ou cache externo.
+> Em produção, a interface web exige `XAI_API_KEY`, `ELEVENLABS_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY`. O Telegram individual também exige `XAVIER_ENCRYPTION_KEY`. O par `LLM_API_URL` / `LLM_API_KEY` só é útil para quem quiser intermediar o tráfego do Grok por um *gateway* corporativo ou cache externo.
 
 ---
 
 ## Integração com Telegram
 
-O endpoint `POST /api/telegram/webhook` recebe atualizações do bot, valida o cabeçalho `X-Telegram-Bot-Api-Secret-Token`, carrega até 20 mensagens anteriores do `chat_id` no projeto Supabase `Cockpit_NowGo`, encaminha a solicitação ao mesmo `generateJarvisReply` usado pelo chat web e envia a resposta pelo método `sendMessage`. A tabela `xavier_telegram_messages` possui RLS habilitado e não concede acesso a `anon` ou `authenticated`; somente o backend com a chave privada consegue gravar e ler o histórico.
+A conexão principal agora é feita pelo navegador em **`/telegram-connect`**, depois que o usuário entra em sua conta. O usuário cria ou escolhe um bot no [@BotFather](https://t.me/BotFather), cola o token na tela e o backend valida o bot com `getMe`, cifra o token usando `XAVIER_ENCRYPTION_KEY`, registra automaticamente um webhook exclusivo e nunca devolve o token ao frontend.
 
-Para configurar o bot, converse com o [@BotFather](https://t.me/BotFather) no Telegram, use `/newbot`, escolha o nome e o username do bot e guarde o token apenas no Vercel. No projeto `javis`, cadastre `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no ambiente Production. O valor de `TELEGRAM_WEBHOOK_SECRET` deve ser aleatório e não deve ser compartilhado; `TELEGRAM_ALLOWED_CHAT_IDS` pode ser usado para restringir o bot a usuários específicos.
+Cada conexão usa uma URL do formato `POST /api/telegram/webhook?connection_id=...` e valida o cabeçalho `X-Telegram-Bot-Api-Secret-Token` com um hash armazenado no Supabase. O bot individual carrega até 20 mensagens recentes da conversa daquele usuário, aplica o limite mensal da conta, envia a solicitação ao mesmo `generateJarvisReply` do chat web e grava o turno na tabela unificada `xavier_messages`. A rota `/api/telegram/status` mostra o estado do webhook e `/api/telegram/disconnect` remove a conexão pelo painel.
 
-Depois de publicar, registre o webhook com o token do bot e o mesmo segredo configurado no Vercel:
+O endpoint sem `connection_id` continua aceitando o bot legado configurado por `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` e `TELEGRAM_ALLOWED_CHAT_IDS`. Novas contas devem usar o fluxo autenticado por usuário; não é necessário executar `setWebhook` manualmente.
 
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://jarvisnowgo.com/api/telegram/webhook","secret_token":"<TELEGRAM_WEBHOOK_SECRET>","allowed_updates":["message"]}'
-```
-
-A resposta deve conter `"ok":true`. Para validar o registro sem exibir o token, consulte `getWebhookInfo` no BotFather ou pela Bot API. O webhook processa mensagens de texto; comandos, stickers e anexos são reconhecidos e ignorados sem quebrar a função. Respostas longas são divididas em mensagens menores para respeitar o limite operacional do Telegram.
+A memória econômica utiliza o projeto `Cockpit_NowGo`: `xavier_profiles` controla memória, retenção e limite mensal; `xavier_conversations` separa os canais; `xavier_messages` guarda somente texto e metadados mínimos; `xavier_memory_summaries` fica reservado para resumos posteriores; e `xavier_usage_monthly` impede consumo inesperado. Não há embeddings nem armazenamento de áudio bruto na primeira fase.
 
 ---
 
