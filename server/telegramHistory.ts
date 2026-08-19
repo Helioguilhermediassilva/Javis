@@ -3,7 +3,7 @@ export interface TelegramHistoryItem {
   content: string;
 }
 
-import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 

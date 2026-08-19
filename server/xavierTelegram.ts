@@ -6,7 +6,7 @@ import {
   randomUUID,
   timingSafeEqual,
 } from "node:crypto";
-import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const WEBHOOK_BASE_URL = (process.env.XAVIER_TELEGRAM_WEBHOOK_BASE_URL || "https://jarvisnowgo.com/api/telegram/webhook").replace(/\/+$/, "");

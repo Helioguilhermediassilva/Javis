@@ -1,4 +1,4 @@
-import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
 
 export type XavierChannel = "web" | "telegram";
 export type XavierRole = "user" | "assistant" | "system";
