@@ -9,6 +9,11 @@ import {
   verifyXavierTelegramWebhookSecret,
 } from "../../server/xavierTelegram.js";
 import {
+  buildManusAcknowledgement,
+  createManusTask,
+  routeManusTaskRequest,
+} from "../../server/xavierManus.js";
+import {
   appendXavierMessage,
   consumeXavierMessageQuota,
   ensureXavierConversation,
@@ -158,6 +163,29 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
     });
     if (!inserted) {
       json(res, 200, { ok: true, duplicate: true });
+      return;
+    }
+
+    const manusRequest = routeManusTaskRequest(text, "auto");
+    if (manusRequest) {
+      const task = await createManusTask({
+        userId: connection.user_id,
+        channel: "telegram",
+        conversationId: conversation.id,
+        telegramConnectionId: connection.id,
+        telegramChatId: chatId,
+      }, manusRequest.requestText, { title: manusRequest.title });
+      const acknowledgement = buildManusAcknowledgement(task);
+      await appendXavierMessage({
+        userId: connection.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: acknowledgement,
+        telegramMessageId: message.message_id,
+      });
+      await sendXavierTelegramMessage(connection, chatId, acknowledgement);
+      json(res, 202, { ok: true, async_task: true, task_id: task.id });
       return;
     }
 

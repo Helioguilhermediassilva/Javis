@@ -8,6 +8,7 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useElevenLabsTTS } from "@/hooks/useElevenLabsTTS";
 import { jarvisChatStream, fileToAttachment, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
+import { waitForXavierManusTask } from "@/lib/xavierApi";
 import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
@@ -142,6 +143,25 @@ export default function Home() {
         },
         onToolStart: (names) => {
           setLogs((l) => [...l, `SYS: consultando fontes (${names.join(", ")})...`]);
+        },
+        onTaskStart: ({ taskId }) => {
+          setLogs((l) => [...l, "SYS: tarefa profunda encaminhada à Manus/SUN; aguardando conclusão..."]);
+          void waitForXavierManusTask(taskId, (task) => {
+            if (!["completed", "failed", "stopped"].includes(task.status)) return;
+            const result = task.result_text?.trim()
+              || task.error_message?.trim()
+              || "A tarefa Manus terminou sem um resultado textual.";
+            setLogs((l) => [...l, `Xavier: ${result}`]);
+            historyRef.current = [
+              ...historyRef.current,
+              { role: "assistant" as const, content: result },
+            ].slice(-20);
+            setHudState("SPEAKING");
+            speakReply(result, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
+          }).catch((error) => {
+            if ((error as Error).name === "AbortError") return;
+            setLogs((l) => [...l, `SYS: acompanhamento Manus — ${(error as Error).message}`]);
+          });
         },
       });
       const userContentForHistory = attachmentsToSend.length > 0

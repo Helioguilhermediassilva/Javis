@@ -13,6 +13,11 @@ import {
   maybeCompactXavierConversation,
   type XavierConversation,
 } from "./xavierMemory.js";
+import {
+  buildManusAcknowledgement,
+  createManusTask,
+  routeManusTaskRequest,
+} from "./xavierManus.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
@@ -304,6 +309,7 @@ export interface ChatPayload {
   userMessage?: string;
   attachments?: AttachmentRef[];
   honorific?: "senhor" | "senhora";
+  engine?: "auto" | "grok" | "manus";
 }
 
 function normalizeChatHistory(history: ChatMessage[]): ChatMessage[] {
@@ -545,6 +551,24 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         role: "user",
         content: persistedUserContent(authenticatedPayload),
       });
+    }
+    const manusRequest = routeManusTaskRequest(authenticatedPayload.userMessage || "", authenticatedPayload.engine || "auto");
+    if (context.persist && manusRequest) {
+      const task = await createManusTask({
+        userId: context.userId,
+        channel: "web",
+        conversationId: context.conversation.id,
+      }, manusRequest.requestText, { title: manusRequest.title });
+      const acknowledgement = buildManusAcknowledgement(task);
+      await appendXavierMessage({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        channel: "web",
+        role: "assistant",
+        content: acknowledgement,
+      });
+      sendJson(res, 202, { reply: acknowledgement, tools_used: ["manus_task.create"], async_task: true, task });
+      return;
     }
     const result = await generateJarvisReply(authenticatedPayload);
     if (context.persist) {
@@ -788,6 +812,34 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }, 15_000);
   const cleanup = () => clearInterval(heartbeat);
   req.on("close", cleanup);
+
+  const manusRequest = routeManusTaskRequest(userMessage, payload.engine || "auto");
+  if (context.persist && manusRequest) {
+    try {
+      const task = await createManusTask({
+        userId: context.userId,
+        channel: "web",
+        conversationId: context.conversation.id,
+      }, manusRequest.requestText, { title: manusRequest.title });
+      const acknowledgement = buildManusAcknowledgement(task);
+      await appendXavierMessage({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        channel: "web",
+        role: "assistant",
+        content: acknowledgement,
+      });
+      sseWrite(res, { type: "task_start", task_id: task.id, manus_task_id: task.manus_task_id, task_url: task.task_url, status: task.status });
+      sseWrite(res, { type: "delta", text: acknowledgement });
+      sseWrite(res, { type: "done", reply: acknowledgement, tools_used: ["manus_task.create"], async_task: true, task_id: task.id });
+    } catch (error) {
+      sseWrite(res, { type: "error", message: (error as Error).message });
+    } finally {
+      cleanup();
+      try { res.end(); } catch {}
+    }
+    return;
+  }
 
   try {
     const usedTools: string[] = [];

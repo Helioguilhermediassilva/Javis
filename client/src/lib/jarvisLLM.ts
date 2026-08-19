@@ -27,8 +27,10 @@ export interface JarvisChatOptions {
   history: ChatMessage[];
   userMessage: string;
   attachments?: AttachmentRef[];
-  /** Como o JARVIS deve tratar o usuário. Injetado como system message extra. */
+  /** Como o XAVIER deve tratar o usuário. Injetado como system message extra. */
   honorific?: Honorific;
+  /** Roteamento: auto (padrão), grok ou manus. */
+  engine?: "auto" | "grok" | "manus";
   signal?: AbortSignal;
 }
 
@@ -43,6 +45,8 @@ export interface JarvisStreamEvents {
   onToolStart?: (names: string[]) => void;
   /** Quando as tools daquela rodada terminam. */
   onToolEnd?: (names: string[]) => void;
+  /** Quando uma tarefa assíncrona Manus é criada. */
+  onTaskStart?: (task: { taskId: string; manusTaskId: string; taskUrl: string | null; status: string }) => void;
   /** Resposta final consolidada (mesmo conteúdo dos deltas concatenados). */
   onDone?: (reply: string, toolsUsed: string[]) => void;
   /** Erro fatal reportado pelo servidor durante o stream. */
@@ -56,12 +60,12 @@ export interface JarvisChatStreamOptions extends JarvisChatOptions, JarvisStream
  * disparando callbacks granulares. Resolve com a resposta final.
  */
 export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<string> {
-  const { history, userMessage, attachments, honorific, signal, onDelta, onToolStart, onToolEnd, onDone, onError } = opts;
+  const { history, userMessage, attachments, honorific, engine, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onDone, onError } = opts;
   const resp = await fetch("/api/jarvis/chat/stream", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine }),
   });
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => "");
@@ -88,7 +92,7 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
           if (!data) continue;
-          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string };
+          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string; task_id?: string; manus_task_id?: string; task_url?: string | null; status?: string };
           try { evt = JSON.parse(data); } catch { continue; }
           if (evt.type === "delta" && typeof evt.text === "string") {
             onDelta?.(evt.text);
@@ -96,6 +100,8 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
             onToolStart?.(evt.names);
           } else if (evt.type === "tool_end" && Array.isArray(evt.names)) {
             onToolEnd?.(evt.names);
+          } else if (evt.type === "task_start" && evt.task_id && evt.manus_task_id) {
+            onTaskStart?.({ taskId: evt.task_id, manusTaskId: evt.manus_task_id, taskUrl: evt.task_url || null, status: evt.status || "running" });
           } else if (evt.type === "done") {
             finalReply = (evt.reply || "").trim();
             toolsUsed = Array.isArray(evt.tools_used) ? evt.tools_used : [];
@@ -151,12 +157,12 @@ export function createSentenceChunker(onSentence: (s: string) => void) {
   };
 }
 
-export async function jarvisChat({ history, userMessage, attachments, honorific, signal }: JarvisChatOptions): Promise<string> {
+export async function jarvisChat({ history, userMessage, attachments, honorific, engine, signal }: JarvisChatOptions): Promise<string> {
   const resp = await fetch("/api/jarvis/chat", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine }),
   });
 
   if (!resp.ok) {
