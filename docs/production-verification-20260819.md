@@ -27,3 +27,9 @@ O commit `620fafd` (`fix: process Telegram audio asynchronously`) foi publicado 
 A correção utiliza `waitUntil` de `@vercel/functions` para responder HTTP 200 imediatamente ao webhook Telegram e continuar o processamento de áudio durante o ciclo da função. O fluxo reduz os timeouts de rede do áudio, usa timeout Claude de 25 segundos para áudio e envia uma mensagem de erro ao Telegram caso a transcrição ou a resposta falhe.
 
 Fonte de verificação: https://vercel.com/nowgo/javis/deployments
+
+## Diagnóstico do bot sem resposta — 2026-08-19
+
+Os logs do Vercel para `/api/telegram/webhook` mostram HTTP 500 em requisições GET e POST. A causa comum a texto e áudio é o carregamento do `pptxgenjs`: o runtime Node serverless tenta executar `dist/pptxgen.es.js` como CommonJS e falha com `SyntaxError: Cannot use import statement outside a module`. Como `xavierPresentation.ts` era importado no topo do webhook, o erro acontecia antes de qualquer diferenciação entre texto e áudio.
+
+Fonte de verificação: https://vercel.com/nowgo/javis/logs

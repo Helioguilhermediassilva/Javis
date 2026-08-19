@@ -1,5 +1,11 @@
-import PptxGenJS from "pptxgenjs";
+import { createRequire } from "node:module";
 import { getSupabaseAdminKey } from "./supabaseAdmin.js";
+
+const require = createRequire(import.meta.url);
+type PptxGenJsConstructor = typeof import("pptxgenjs").default;
+const pptxGenJsModule = require("pptxgenjs") as PptxGenJsConstructor | { default: PptxGenJsConstructor };
+const PptxGenJS = (typeof pptxGenJsModule === "function" ? pptxGenJsModule : pptxGenJsModule.default) as PptxGenJsConstructor;
+type PptxGenJsInstance = InstanceType<PptxGenJsConstructor>;
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 100) || "xavier-files";
@@ -118,7 +124,7 @@ function parsePresentationOutline(outline: string, fallbackTitle: string): { tit
   };
 }
 
-function addFooter(pptx: PptxGenJS, slide: ReturnType<PptxGenJS["addSlide"]>, index: number): void {
+function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance["addSlide"]>, index: number): void {
   slide.addShape(pptx.ShapeType.line, { x: 0.65, y: 7.08, w: 12.0, h: 0, line: { color: "1F3A4D", width: 0.7 } });
   slide.addText("XAVIER | INTELIGÊNCIA SOBERANA", { x: 0.7, y: 7.15, w: 4.2, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", margin: 0 });
   slide.addText(String(index), { x: 12.1, y: 7.15, w: 0.45, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", align: "right", margin: 0 });
