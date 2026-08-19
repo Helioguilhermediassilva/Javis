@@ -289,7 +289,7 @@ interface AttachmentRef {
   name?: string;
 }
 
-interface ChatPayload {
+export interface ChatPayload {
   history?: ChatMessage[];
   userMessage?: string;
   attachments?: AttachmentRef[];
@@ -325,37 +325,32 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== "POST") {
-    sendJson(res, 405, { error: "Method not allowed" });
-    return;
+export class JarvisChatError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+    this.name = "JarvisChatError";
   }
+}
 
+export interface JarvisChatResult {
+  reply: string;
+  tools_used: string[];
+  timings: Array<{ round: number; llmMs: number; toolsMs: number; toolNames: string[] }>;
+}
+
+export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisChatResult> {
   const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
   const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
-  if (!llmKey) {
-    sendJson(res, 500, { error: "LLM not configured on server" });
-    return;
-  }
-
-  let payload: ChatPayload;
-  try {
-    payload = (await readJsonBody(req)) as ChatPayload;
-  } catch (e) {
-    sendJson(res, 400, { error: `Invalid JSON: ${(e as Error).message}` });
-    return;
-  }
+  if (!llmKey) throw new JarvisChatError(500, "LLM not configured on server");
 
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
   const history = Array.isArray(payload.history) ? payload.history.slice(-20) : [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
   const honorificMsg = honorificSystemMessage(payload.honorific);
   if (!userMessage.trim() && attachments.length === 0) {
-    sendJson(res, 400, { error: "userMessage or attachments required" });
-    return;
+    throw new JarvisChatError(400, "userMessage or attachments required");
   }
 
-  // Build the user turn. If we have attachments, use OpenAI-style multipart content.
   const cleanedHistory = history
     .filter((m) => m && typeof m.content === "string" && (m.role === "user" || m.role === "assistant"))
     .map((m) => ({ role: m.role, content: m.content }));
@@ -374,7 +369,7 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         parts.push({ type: "image_url", image_url: { url: att.data, detail: "auto" } });
       } else if (att.kind === "text") {
         const excerpt = String(att.data).slice(0, 8000);
-        const label = att.name ? `[Attachment: ${att.name}]\n` : "[Attachment]\n";
+        const label = att.name ? `[Attachment: ${att.name}]\\n` : "[Attachment]\\n";
         parts.push({ type: "text", text: `${label}${excerpt}` });
       }
     }
@@ -383,14 +378,9 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     userTurn = { role: "user", content: userMessage };
   }
 
-  // Pré-busca paralela quando o pedido casa um briefing combinado.
   const intent = detectBriefingIntent(userMessage);
   let prefetchedSystemMsg: { role: "system"; content: string } | null = null;
-  let prefetchToolNames: string[] = [];
-  if (intent) {
-    prefetchToolNames = ["buscar_dados_df", "sentimento_social_df"];
-    prefetchedSystemMsg = await prefetchBriefingContext(intent);
-  }
+  if (intent) prefetchedSystemMsg = await prefetchBriefingContext(intent);
 
   const messages: Array<Record<string, unknown>> = [
     { role: "system", content: JARVIS_SYSTEM_PROMPT },
@@ -400,7 +390,6 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     userTurn,
   ];
 
-  // Loop de tool calling: até 3 rodadas para o LLM consultar fontes ao vivo.
   const callLlm = async (msgs: Array<Record<string, unknown>>) => {
     const r = await fetch(`${llmBase}/v1/chat/completions`, {
       method: "POST",
@@ -428,23 +417,16 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       const tLlm0 = Date.now();
       const up = await callLlm(convo);
       const llmMs = Date.now() - tLlm0;
-      if (!up.ok) {
-        sendJson(res, 502, { error: `Upstream ${up.status}: ${up.text.slice(0, 300)}` });
-        return;
-      }
+      if (!up.ok) throw new JarvisChatError(502, `Upstream ${up.status}: ${up.text.slice(0, 300)}`);
       let parsed: { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } }> };
-      try { parsed = JSON.parse(up.text); } catch {
-        sendJson(res, 502, { error: "Invalid upstream JSON" });
-        return;
-      }
+      try { parsed = JSON.parse(up.text); } catch { throw new JarvisChatError(502, "Invalid upstream JSON"); }
       const choice = parsed.choices?.[0]?.message;
-      if (!choice) { sendJson(res, 502, { error: "Empty reply from upstream" }); return; }
+      if (!choice) throw new JarvisChatError(502, "Empty reply from upstream");
       const toolCalls = choice.tool_calls || [];
       if (toolCalls.length === 0) {
         finalContent = (choice.content || "").trim();
         break;
       }
-      // Anexa a mensagem do assistente com as tool_calls e executa cada tool em paralelo.
       convo.push({ role: "assistant", content: choice.content || null, tool_calls: toolCalls });
       const tTools0 = Date.now();
       const toolNames: string[] = [];
@@ -462,17 +444,34 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       roundTimings.push({ round, llmMs, toolsMs, toolNames });
       for (const tr of toolResults) convo.push(tr);
     }
-    if (!finalContent) {
-      sendJson(res, 502, { error: "Empty final reply after tool calls" });
-      return;
-    }
-    // Captura push-to-stdout para diagnóstico de latência
+    if (!finalContent) throw new JarvisChatError(502, "Empty final reply after tool calls");
     if (roundTimings.some((r) => r.llmMs + r.toolsMs > 2000)) {
       console.log("[jarvis-chat] timings:", JSON.stringify(roundTimings));
     }
-    sendJson(res, 200, { reply: finalContent, tools_used: usedTools, timings: roundTimings });
+    return { reply: finalContent, tools_used: usedTools, timings: roundTimings };
   } catch (e) {
-    sendJson(res, 502, { error: `Network error: ${(e as Error).message}` });
+    if (e instanceof JarvisChatError) throw e;
+    throw new JarvisChatError(502, `Network error: ${(e as Error).message}`);
+  }
+}
+
+export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Method not allowed" });
+    return;
+  }
+  let payload: ChatPayload;
+  try {
+    payload = (await readJsonBody(req)) as ChatPayload;
+  } catch (e) {
+    sendJson(res, 400, { error: `Invalid JSON: ${(e as Error).message}` });
+    return;
+  }
+  try {
+    sendJson(res, 200, await generateJarvisReply(payload));
+  } catch (e) {
+    const error = e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
+    sendJson(res, error.status, { error: error.message });
   }
 }
 

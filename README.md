@@ -133,8 +133,10 @@ Linhas de comentário, *system prompt* e branding inteiros foram revisados para 
 │   │   ├── topics.ts         # GET  /api/df/topics
 │   │   ├── search.ts         # GET  /api/df/search
 │   │   └── dataset.ts        # GET  /api/df/dataset
-│   └── grok/
-│       └── sentiment.ts      # POST /api/grok/sentiment
+│   ├── grok/
+│   │   └── sentiment.ts      # POST /api/grok/sentiment
+│   └── telegram/
+│       └── webhook.ts        # POST /api/telegram/webhook
 ├── client/                   # Aplicação React (Vite)
 │   ├── index.html
 │   └── src/
@@ -147,12 +149,14 @@ Linhas de comentário, *system prompt* e branding inteiros foram revisados para 
 │   ├── grokProxy.ts          # /api/grok/sentiment + cache compartilhado
 │   ├── dfDataProxy.ts        # /api/df/*    — CKAN do GDF
 │   ├── dfSources.ts          # Constantes dos grupos CKAN suportados
+│   ├── telegramHistory.ts    # Histórico Telegram no Supabase Cockpit_NowGo
 │   └── *.test.ts             # Suíte Vitest (unitária e de integração)
 ├── shared/                   # Tipos compartilhados client/server
 ├── vercel.json               # Build, rewrites SPA, framework=null
 ├── vite.config.ts            # Build do frontend + proxy /api em dev
 ├── vitest.config.ts          # Ambientes node/happy-dom por glob
-└── package.json
+├── supabase/migrations/       # Migrações do histórico privado do Xavier
+├── package.json
 ```
 
 ---
@@ -167,8 +171,31 @@ Todas confidenciais — devem ser cadastradas no painel do Vercel (em *Project S
 | `ELEVENLABS_API_KEY` | Servidor — *streaming* TTS da voz clonada | **Sim** |
 | `LLM_API_URL` | Servidor — base URL alternativa para um *gateway* de LLM próprio. Quando ausente, o JARVIS chama `https://api.x.ai` diretamente | Não |
 | `LLM_API_KEY` | Servidor — chave do *gateway* citado acima. Quando ausente, o JARVIS reaproveita automaticamente `XAI_API_KEY` | Não |
+| `TELEGRAM_BOT_TOKEN` | Webhook — token do bot criado pelo @BotFather | Para Telegram |
+| `TELEGRAM_WEBHOOK_SECRET` | Webhook — segredo enviado no cabeçalho de cada atualização | Para Telegram |
+| `TELEGRAM_ALLOWED_CHAT_IDS` | Webhook — lista opcional de `chat_id` autorizados, separados por vírgula | Não |
+| `SUPABASE_URL` | Backend — URL do projeto `Cockpit_NowGo` | Para Telegram |
+| `SUPABASE_SERVICE_ROLE_KEY` | Backend — chave privada para a tabela do histórico, nunca exposta ao cliente | Para Telegram |
 
-> Em produção, o JARVIS funciona com **apenas duas variáveis**: `XAI_API_KEY` e `ELEVENLABS_API_KEY`. O par `LLM_API_URL` / `LLM_API_KEY` só é útil para quem quiser intermediar o tráfego do Grok por um *gateway* corporativo ou cache externo.
+> Em produção, a interface web funciona com `XAI_API_KEY` e `ELEVENLABS_API_KEY`. Para ativar o Telegram, acrescente as cinco variáveis `TELEGRAM_*` e `SUPABASE_*` indicadas acima. O par `LLM_API_URL` / `LLM_API_KEY` só é útil para quem quiser intermediar o tráfego do Grok por um *gateway* corporativo ou cache externo.
+
+---
+
+## Integração com Telegram
+
+O endpoint `POST /api/telegram/webhook` recebe atualizações do bot, valida o cabeçalho `X-Telegram-Bot-Api-Secret-Token`, carrega até 20 mensagens anteriores do `chat_id` no projeto Supabase `Cockpit_NowGo`, encaminha a solicitação ao mesmo `generateJarvisReply` usado pelo chat web e envia a resposta pelo método `sendMessage`. A tabela `xavier_telegram_messages` possui RLS habilitado e não concede acesso a `anon` ou `authenticated`; somente o backend com a chave privada consegue gravar e ler o histórico.
+
+Para configurar o bot, converse com o [@BotFather](https://t.me/BotFather) no Telegram, use `/newbot`, escolha o nome e o username do bot e guarde o token apenas no Vercel. No projeto `javis`, cadastre `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` no ambiente Production. O valor de `TELEGRAM_WEBHOOK_SECRET` deve ser aleatório e não deve ser compartilhado; `TELEGRAM_ALLOWED_CHAT_IDS` pode ser usado para restringir o bot a usuários específicos.
+
+Depois de publicar, registre o webhook com o token do bot e o mesmo segredo configurado no Vercel:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://jarvisnowgo.com/api/telegram/webhook","secret_token":"<TELEGRAM_WEBHOOK_SECRET>","allowed_updates":["message"]}'
+```
+
+A resposta deve conter `"ok":true`. Para validar o registro sem exibir o token, consulte `getWebhookInfo` no BotFather ou pela Bot API. O webhook processa mensagens de texto; comandos, stickers e anexos são reconhecidos e ignorados sem quebrar a função. Respostas longas são divididas em mensagens menores para respeitar o limite operacional do Telegram.
 
 ---
 
@@ -198,9 +225,10 @@ pnpm build        # build de produção em ./dist
 
 1. **Importe o repositório** em <https://vercel.com/new> escolhendo `Helioguilhermediassilva/Javis`.
 2. Em *Build & Development Settings*, deixe que o Vercel detecte o `vercel.json` automaticamente. O `buildCommand` é `pnpm build`, o `outputDirectory` é `dist`, e a *Framework Preset* deve ficar como **Other**.
-3. Em *Environment Variables*, cadastre `XAI_API_KEY` e `ELEVENLABS_API_KEY` (escolha *Production* e *Preview*).
+3. Em *Environment Variables*, cadastre `XAI_API_KEY` e `ELEVENLABS_API_KEY` (escolha *Production* e *Preview*). Para ativar o Telegram, cadastre também `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `SUPABASE_URL` e `SUPABASE_SERVICE_ROLE_KEY` em **Production**.
 4. Clique em **Deploy**. O Vercel publicará o frontend como estático e cada arquivo dentro de `api/` como uma função *serverless* Node 20.
-5. Para domínio próprio (ex.: `jarvis.nowgo.ai`), use o painel *Domains* do projeto. O Vercel cuida do certificado TLS automaticamente.
+5. Registre o webhook conforme a seção **Integração com Telegram** e faça uma mensagem de teste no bot.
+6. Para domínio próprio (ex.: `jarvis.nowgo.ai`), use o painel *Domains* do projeto. O Vercel cuida do certificado TLS automaticamente.
 
 > **Limites importantes do plano gratuito:** funções *serverless* têm execução máxima de 60 s no plano Hobby. As rotas pesadas (`/api/jarvis/chat`, `/api/jarvis/chat/stream`, `/api/jarvis/tts`, `/api/grok/sentiment`) já estão configuradas com `maxDuration: 60`, suficiente para *briefings* combinados em condições normais. Em produção sob carga, recomendamos o plano Pro ou um *gateway* dedicado.
 
