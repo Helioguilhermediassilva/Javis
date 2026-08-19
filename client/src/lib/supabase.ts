@@ -6,9 +6,11 @@ const supabasePublishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || 
 export const supabase: SupabaseClient | null = supabasePublishableKey
   ? createClient(supabaseUrl, supabasePublishableKey, {
       auth: {
-        persistSession: true,
+        // A sessão permanece apenas enquanto a aba estiver aberta; cada nova abertura exige login.
+        persistSession: false,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+        // O link de confirmação apenas confirma o e-mail; não abre o cockpit automaticamente.
+        detectSessionInUrl: false,
       },
     })
   : null;

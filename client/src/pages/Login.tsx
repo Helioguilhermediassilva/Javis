@@ -54,7 +54,7 @@ export default function Login() {
               <BrainCircuit className="h-7 w-7" />
               XAVIER / ACCESS NODE
             </div>
-            <h1 className="max-w-md text-4xl font-semibold leading-tight text-[#d8f8ff]">Inteligência pessoal com memória sob seu controle.</h1>
+            <h1 className="max-w-md text-4xl font-semibold leading-tight text-[#d8f8ff]">Inteligência Soberana com memória sob seu controle.</h1>
             <p className="mt-6 max-w-md text-sm leading-7 text-[#5ab8cc]">Conecte a interface web e o Telegram à mesma identidade. O Xavier mantém somente o contexto necessário, com limites de uso e memória que podem ser desativados.</p>
           </div>
           <div className="grid gap-3 text-xs text-[#3a8a9a]">

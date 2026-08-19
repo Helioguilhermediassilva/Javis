@@ -14,6 +14,27 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function clearAuthCallbackUrl() {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const searchKeys = ["code", "type", "access_token", "refresh_token", "expires_in", "expires_at", "token_type", "error", "error_code", "error_description"];
+  let changed = false;
+  for (const key of searchKeys) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.delete(key);
+      changed = true;
+    }
+  }
+  if (url.hash) {
+    const hashParams = new URLSearchParams(url.hash.slice(1));
+    if (searchKeys.some((key) => hashParams.has(key))) {
+      url.hash = "";
+      changed = true;
+    }
+  }
+  if (changed) window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
@@ -21,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let mounted = true;
+    clearAuthCallbackUrl();
     let unsubscribe = () => {};
     try {
       const client = requireSupabase();
