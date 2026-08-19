@@ -19,3 +19,11 @@ A verificação seguinte confirmou o deployment `javis-oezn26qcw-nowgo.vercel.ap
 
 
 Durante o diagnóstico do áudio, o deployment público `https://javis-oezn26qcw-nowgo.vercel.app/` abriu com status funcional e exibiu a tela de login `XAVIER / ACCESS NODE — Inteligência Soberana`. O teste visual não executou login nem qualquer operação sensível.
+
+## Correção de áudio Telegram — 2026-08-19
+
+O commit `620fafd` (`fix: process Telegram audio asynchronously`) foi publicado na branch `main` e aparece como `Ready` em Production no projeto Vercel `javis`. URL do deployment: https://javis-1mqvkvp48-nowgo.vercel.app
+
+A correção utiliza `waitUntil` de `@vercel/functions` para responder HTTP 200 imediatamente ao webhook Telegram e continuar o processamento de áudio durante o ciclo da função. O fluxo reduz os timeouts de rede do áudio, usa timeout Claude de 25 segundos para áudio e envia uma mensagem de erro ao Telegram caso a transcrição ou a resposta falhe.
+
+Fonte de verificação: https://vercel.com/nowgo/javis/deployments
