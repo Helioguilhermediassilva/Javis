@@ -25,3 +25,9 @@ O commit `ba72ae5` foi publicado na branch `main` e o projeto Vercel `javis` ini
 ## Teste de produção
 
 Após o deployment `ba72ae5` aparecer como `Ready`, foi enviado um POST JSON de verificação sem assinatura para `https://jarvisnowgo.com/api/manus/webhook`. A resposta foi `HTTP/2 200`, confirmando que a validação inicial da Manus pode alcançar o endpoint e receber o status exigido. Eventos reais continuam sujeitos à assinatura RSA-SHA256.
+
+## Isolamento da causa
+
+Os quatro probes públicos confirmaram o contrato do callback: corpo vazio, `{}` e `{"event_type":"test"}` retornam HTTP 200; um evento `task_stopped` sem assinatura retorna HTTP 401. Portanto, o endpoint aceita a verificação e continua protegendo eventos reais.
+
+A chave `MANUS_API_KEY` não está disponível no ambiente local desta sessão, então não foi possível executar `webhook.create` ou `webhook.list` diretamente sem solicitar a credencial do usuário. A documentação oficial também expõe `webhook.list` para checar duplicidade antes de tentar criar outro registro: https://open.manus.ai/docs/v2/webhook.list.
