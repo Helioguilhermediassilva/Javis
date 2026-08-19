@@ -96,7 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data, error } = await requireSupabase().auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { name: displayName.trim().slice(0, 120) } },
+          options: {
+            data: { name: displayName.trim().slice(0, 120) },
+            emailRedirectTo: "https://jarvisnowgo.com/email-confirmed",
+          },
         });
         return {
           error: error ? new Error(error.message) : null,

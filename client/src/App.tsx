@@ -10,6 +10,7 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import TelegramConnect from "./pages/TelegramConnect";
 import MemorySettings from "./pages/MemorySettings";
+import EmailConfirmed from "./pages/EmailConfirmed";
 
 function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   const { loading, user } = useAuth();
@@ -37,6 +38,7 @@ function Router() {
       <Route path={"/"} component={ProtectedHome} />
       <Route path={"/telegram-connect"} component={ProtectedTelegramConnect} />
       <Route path={"/memory"} component={ProtectedMemorySettings} />
+      <Route path={"/email-confirmed"} component={EmailConfirmed} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
