@@ -91,3 +91,18 @@ A tarefa Manus deve receber somente o pedido e o contexto mínimo necessário, i
 
 A única exceção atualmente mantida no caminho do Grok é o `x_search` já usado pelo briefing social configurado para o Distrito Federal. Esse caminho não representa uma integração direta com YouTube, Google, Instagram ou TikTok e não deve ser expandido para substituir a pesquisa agentic da Manus.
 
+
+
+## Migração final — Claude direto no lugar da Manus/SUN
+
+A decisão operacional foi revisada após a indisponibilidade do webhook Manus. O fluxo ativo do Xavier não usa mais `MANUS_API_KEY`, `xavier_manus_tasks`, criação de tarefas Manus nem webhook de conclusão Manus. O arquivo `server/xavierClaude.ts` chama diretamente a Anthropic Messages API com `ANTHROPIC_API_KEY` mantida somente no backend Vercel.
+
+O Grok continua como cérebro conversacional imediato. O roteador encaminha automaticamente para Claude solicitações de pesquisa, comparação, relatório, documento, tendências, panorama, benchmarking e PDF; o engine legado `manus` permanece aceito apenas como compatibilidade de frontend e significa Claude. O engine `grok` continua forçando o caminho Grok.
+
+Claude recebe o histórico econômico da conversa atual, o resumo persistido quando habilitado e o contexto mínimo da tarefa. No web, a conversa é identificada por `user_id`; no Telegram individual, por `user_id + telegram_connection_id + telegram_chat_id`. As mensagens e respostas são persistidas pelo repositório `xavierMemory`, com quota, retenção e compactação existentes. O áudio bruto continua sem persistência.
+
+Para pesquisas externas, Claude usa a ferramenta web search da Anthropic. Não existem conectores diretos do backend para YouTube, Google, Instagram ou TikTok. PDFs são redigidos por Claude e gerados pelo PDFKit no backend, com upload ao Supabase Storage e entrega pelo Telegram/cockpit.
+
+A variável de produção necessária para este fluxo é `ANTHROPIC_API_KEY`; opcionalmente, `ANTHROPIC_MODEL` pode selecionar outro modelo suportado pela conta. A chave deve ser adicionada no projeto Vercel `javis` e nunca no frontend, GitHub ou Supabase.
+
+Referências oficiais Anthropic: https://platform.claude.com/docs/en/get-api-key, https://platform.claude.com/docs/en/api/messages, https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool, https://platform.claude.com/docs/en/about-claude/models/overview.

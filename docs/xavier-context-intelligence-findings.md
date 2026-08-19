@@ -19,22 +19,23 @@ Não se deve prometer acesso irrestrito a todo conteúdo, comentários e insight
 A Custom Search JSON API permite recuperar resultados web e de imagem por meio de um Programmable Search Engine e requer API key. O Google também documenta uma Trends API em alpha para dados programáticos de interesse de busca, com acesso e disponibilidade sujeitos ao estágio do produto. Para contexto por cidade/região, a Places API fornece busca e detalhes de locais e dados geográficos. Fontes: https://developers.google.com/custom-search/v1/overview, https://developers.google.com/search/apis/trends e https://developers.google.com/maps/documentation/places/web-service/overview
 
 ### Registro da análise inicial sobre o Google
-Durante a análise inicial foram consideradas busca web, tendências e Places como possibilidades técnicas. Essa alternativa foi rejeitada para o backend do Javis: nenhum desses conectores será implementado diretamente no Xavier. Quando a solicitação exigir dados do Google ou contexto por cidade/região, a tarefa será encaminhada à Manus/SUN, que deverá aplicar autorização, limites, fontes e escopos apropriados.
+Durante a análise inicial foram consideradas busca web, tendências e Places como possibilidades técnicas. Essa alternativa foi rejeitada para o backend do Javis: nenhum desses conectores será implementado diretamente no Xavier. Quando a solicitação exigir dados do Google ou contexto por cidade/região, o executor Claude usará a ferramenta web search da Anthropic, respeitando as políticas e permissões da fonte.
 
-## Decisão arquitetural — fontes externas via Manus/SUN
+## Decisão arquitetural — fontes externas via Claude
 
-A arquitetura do Xavier não terá integrações diretas com YouTube, Google, Instagram ou TikTok no backend do Javis. Essas fontes serão pesquisadas pela camada Manus/SUN, quando a tarefa exigir pesquisa externa e quando a Manus tiver acesso legítimo às fontes.
+A arquitetura do Xavier não terá integrações diretas com YouTube, Google, Instagram ou TikTok no backend do Javis. Essas fontes serão pesquisadas exclusivamente pela ferramenta web search da Claude quando a tarefa exigir pesquisa externa. O backend não armazena credenciais dessas plataformas nem reproduz suas APIs.
 
-O Grok permanece responsável pela conversa imediata e pelas ferramentas já existentes, como o `x_search` usado no briefing social do Distrito Federal. A Manus/SUN será responsável por pesquisas longas, comparações entre cidades e regiões, análise de vídeos/comentários quando disponível, síntese de evidências e geração de documentos.
+O Grok permanece responsável pela conversa imediata e pelas ferramentas diretas já existentes, como o `x_search` usado no briefing social do Distrito Federal. Claude é responsável por pesquisas longas, comparações entre cidades e regiões, síntese de evidências, redação de relatórios e geração de conteúdo para PDFs. A Manus/SUN e seu webhook não fazem parte do roteamento ativo.
 
-O Telegram e a web continuam sendo canais do Xavier, não conectores de dados. Cada solicitação Manus deve carregar apenas o `user_id`, o canal, a conversa e o contexto mínimo necessário. Sessão, memória econômica, quota e isolamento continuam no Supabase; tokens de fontes externas não serão armazenados no frontend nem no histórico bruto.
+O Telegram e a web continuam sendo canais do Xavier, não conectores de dados. Cada solicitação Claude recebe apenas o `user_id`, o canal, a conversa e o contexto mínimo necessário. Sessão, memória econômica, quota e isolamento continuam no Supabase; a chave `ANTHROPIC_API_KEY` permanece somente no backend Vercel.
 
-As referências de Instagram, YouTube, Google e TikTok acima permanecem como registro de limitações e permissões oficiais, não como integrações planejadas para o Javis. A Manus deve respeitar autenticação, robots/políticas, direitos de acesso e limites das fontes ao realizar a pesquisa.
+As referências de Instagram, YouTube, Google e TikTok acima permanecem como registro de limitações e permissões oficiais, não como integrações planejadas para o Javis. Claude deve respeitar autenticação, políticas, direitos de acesso e limites das fontes ao realizar a pesquisa.
 
 ## Escopo direto do Javis
 
 - Grok/xAI para respostas conversacionais rápidas e ferramentas já configuradas.
-- Manus/SUN para pesquisa externa, tarefas agentic, comparação regional, relatórios e PDFs.
+- Claude/Anthropic para pesquisa externa via web search, tarefas profundas, comparação regional e relatórios.
+- PDFKit + Supabase Storage para geração e entrega de PDFs pelo backend.
 - Telegram e web como canais de entrada e entrega.
 - Supabase para sessão, memória econômica, tarefas e isolamento por `user_id`.
 - ElevenLabs para transcrição de áudio recebido e voz do Xavier quando o canal suportar saída de áudio.

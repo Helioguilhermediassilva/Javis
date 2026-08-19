@@ -8,7 +8,7 @@ import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useElevenLabsTTS } from "@/hooks/useElevenLabsTTS";
 import { jarvisChatStream, fileToAttachment, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
-import { waitForXavierManusTask, type XavierManusTaskAttachment } from "@/lib/xavierApi";
+import type { XavierFileAttachment } from "@/lib/xavierApi";
 import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
@@ -70,7 +70,7 @@ export default function Home() {
   const [hudState, setHudState] = useState<HudState>("INITIALISING");
   const [muted, setMuted] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
-  const [generatedFiles, setGeneratedFiles] = useState<XavierManusTaskAttachment[]>([]);
+  const [generatedFiles, setGeneratedFiles] = useState<XavierFileAttachment[]>([]);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
   const [showSetup, setShowSetup] = useState(true);
   const [clock, setClock] = useState("");
@@ -146,31 +146,9 @@ export default function Home() {
           setLogs((l) => [...l, `SYS: consultando fontes (${names.join(", ")})...`]);
         },
         onFile: (file) => {
-          const attachment: XavierManusTaskAttachment = { file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
+          const attachment: XavierFileAttachment = { file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
           setGeneratedFiles((files) => [attachment, ...files].filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index).slice(0, 8));
           setLogs((l) => [...l, `SYS: PDF gerado — ${file.file_name}`]);
-        },
-        onTaskStart: ({ taskId }) => {
-          setLogs((l) => [...l, "SYS: tarefa profunda encaminhada à Manus/SUN; aguardando conclusão..."]);
-          void waitForXavierManusTask(taskId, (task) => {
-            if (!["completed", "failed", "stopped"].includes(task.status)) return;
-            const result = task.result_text?.trim()
-              || task.error_message?.trim()
-              || "A tarefa Manus terminou sem um resultado textual.";
-            if (task.attachments?.length) {
-              setGeneratedFiles((files) => [...task.attachments, ...files].filter((file, index, all) => all.findIndex((item) => item.url === file.url) === index).slice(0, 8));
-            }
-            setLogs((l) => [...l, `Xavier: ${result}`]);
-            historyRef.current = [
-              ...historyRef.current,
-              { role: "assistant" as const, content: result },
-            ].slice(-20);
-            setHudState("SPEAKING");
-            speakReply(result, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
-          }).catch((error) => {
-            if ((error as Error).name === "AbortError") return;
-            setLogs((l) => [...l, `SYS: acompanhamento Manus — ${(error as Error).message}`]);
-          });
         },
       });
       const userContentForHistory = attachmentsToSend.length > 0

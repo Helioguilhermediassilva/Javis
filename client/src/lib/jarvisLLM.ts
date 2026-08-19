@@ -29,8 +29,8 @@ export interface JarvisChatOptions {
   attachments?: AttachmentRef[];
   /** Como o XAVIER deve tratar o usuário. Injetado como system message extra. */
   honorific?: Honorific;
-  /** Roteamento: auto (padrão), grok ou manus. */
-  engine?: "auto" | "grok" | "manus";
+  /** Roteamento: auto (padrão), grok ou claude; manus permanece como alias legado. */
+  engine?: "auto" | "grok" | "claude" | "manus";
   signal?: AbortSignal;
 }
 
@@ -45,7 +45,7 @@ export interface JarvisStreamEvents {
   onToolStart?: (names: string[]) => void;
   /** Quando as tools daquela rodada terminam. */
   onToolEnd?: (names: string[]) => void;
-  /** Quando uma tarefa assíncrona Manus é criada. */
+  /** Compatibilidade legada para eventos de tarefas profundas. */
   onTaskStart?: (task: { taskId: string; manusTaskId: string; taskUrl: string | null; status: string }) => void;
   /** Arquivo gerado pelo Xavier durante o processamento. */
   onFile?: (file: { file_name: string; url: string; size_bytes?: number }) => void;

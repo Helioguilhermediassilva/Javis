@@ -13,12 +13,13 @@ import {
   maybeCompactXavierConversation,
   type XavierConversation,
 } from "./xavierMemory.js";
+import { isPdfTaskRequest } from "./xavierManus.js";
 import {
-  buildManusAcknowledgement,
-  createManusTask,
-  isPdfTaskRequest,
-  routeManusTaskRequest,
-} from "./xavierManus.js";
+  appendClaudeCitations,
+  generateClaudeReply,
+  isClaudeConfigured,
+  shouldUseClaudeTask,
+} from "./xavierClaude.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
@@ -311,7 +312,7 @@ export interface ChatPayload {
   userMessage?: string;
   attachments?: AttachmentRef[];
   honorific?: "senhor" | "senhora";
-  engine?: "auto" | "grok" | "manus";
+  engine?: "auto" | "grok" | "manus" | "claude";
 }
 
 function normalizeChatHistory(history: ChatMessage[]): ChatMessage[] {
@@ -507,16 +508,29 @@ async function createLocalXavierPdf(input: {
   requestText: string;
   history: ChatMessage[];
 }): Promise<XavierGeneratedPdfAttachment> {
-  const content = await generateJarvisReply({
-    history: input.history,
-    userMessage: `Prepare o conteúdo completo para um documento PDF em português. Não explique limitações e não diga que não pode gerar arquivos; escreva diretamente o conteúdo solicitado, com título e seções claras quando fizer sentido. Pedido original: ${input.requestText}`,
-    honorific: "senhor",
-  });
+  const pdfPrompt = `Prepare o conteúdo completo para um documento PDF em português. Não explique limitações e não diga que não pode gerar arquivos; escreva diretamente o conteúdo solicitado, com título e seções claras quando fizer sentido. Pedido original: ${input.requestText}`;
+  let content: string;
+  if (isClaudeConfigured()) {
+    const result = await generateClaudeReply({
+      history: input.history,
+      systemPrompt: JARVIS_SYSTEM_PROMPT,
+      userMessage: pdfPrompt,
+      useWebSearch: false,
+      maxTokens: 8_000,
+    });
+    content = appendClaudeCitations(result.reply, result.citations);
+  } else {
+    content = (await generateJarvisReply({
+      history: input.history,
+      userMessage: pdfPrompt,
+      honorific: "senhor",
+    })).reply;
+  }
   return createXavierPdfAttachment({
     userId: input.userId,
     taskId: input.taskId,
     title: "Documento solicitado ao Xavier",
-    body: content.reply,
+    body: content,
   });
 }
 
@@ -586,28 +600,34 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         content: persistedUserContent(authenticatedPayload),
       });
     }
-    const manusRequest = routeManusTaskRequest(authenticatedPayload.userMessage || "", authenticatedPayload.engine || "auto");
-    if (context.persist && manusRequest) {
-      try {
-        const task = await createManusTask({
-          userId: context.userId,
-          channel: "web",
-          conversationId: context.conversation.id,
-        }, manusRequest.requestText, { title: manusRequest.title });
-        const acknowledgement = buildManusAcknowledgement(task);
+    const requestedEngine = authenticatedPayload.engine || "auto";
+    const claudeTask = shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine);
+    if (claudeTask && (requestedEngine === "claude" || requestedEngine === "manus") && !isClaudeConfigured()) {
+      throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
+    }
+    if (claudeTask && isClaudeConfigured() && !isPdfTaskRequest(authenticatedPayload.userMessage || "")) {
+      const result = await generateClaudeReply({
+        history: context.history,
+        systemPrompt: JARVIS_SYSTEM_PROMPT,
+        userMessage: authenticatedPayload.userMessage || "",
+        attachments: authenticatedPayload.attachments,
+        useWebSearch: true,
+      });
+      const reply = appendClaudeCitations(result.reply, result.citations);
+      if (context.persist) {
         await appendXavierMessage({
           userId: context.userId,
           conversationId: context.conversation.id,
           channel: "web",
           role: "assistant",
-          content: acknowledgement,
+          content: reply,
         });
-        sendJson(res, 202, { reply: acknowledgement, tools_used: ["manus_task.create"], async_task: true, task });
-        return;
-      } catch (error) {
-        if (!isPdfTaskRequest(authenticatedPayload.userMessage || "")) throw error;
-        console.warn("[jarvis-chat] Manus PDF task failed; using local fallback", (error as Error).message);
+        await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+          console.warn("[xavier-memory] Claude maintenance failed", (error as Error).message);
+        });
       }
+      sendJson(res, 200, { reply, tools_used: result.tools_used, timings: [], citations: result.citations, model: result.model, executor: "claude" });
+      return;
     }
     if (context.persist && isPdfTaskRequest(authenticatedPayload.userMessage || "")) {
       const { reply, attachment } = await buildLocalPdfResult({
@@ -773,10 +793,6 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }
   const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
   const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
-  if (!llmKey) {
-    sendJson(res, 500, { error: "LLM not configured on server" });
-    return;
-  }
   let payload: ChatPayload;
   try {
     payload = (await readJsonBody(req)) as ChatPayload;
@@ -847,6 +863,81 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     }
   }
 
+  // Heartbeat para manter a conexão viva atrás de proxies que matam idle.
+  const heartbeat = setInterval(() => {
+    try { res.write(":hb\n\n"); } catch {}
+  }, 15_000);
+  const cleanup = () => clearInterval(heartbeat);
+  req.on("close", cleanup);
+
+  const claudeTask = shouldUseClaudeTask(userMessage, payload.engine || "auto");
+  if (claudeTask && (isClaudeConfigured() || payload.engine === "claude" || payload.engine === "manus")) {
+    try {
+      if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
+      if (isPdfTaskRequest(userMessage)) {
+        const { reply, attachment } = await buildLocalPdfResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: userMessage,
+          history,
+        });
+        if (context.persist) {
+          await appendXavierMessage({
+            userId: context.userId,
+            conversationId: context.conversation.id,
+            channel: "web",
+            role: "assistant",
+            content: reply,
+          });
+          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+            console.warn("[xavier-memory] Claude PDF maintenance failed", (error as Error).message);
+          });
+        }
+        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
+        sseWrite(res, { type: "delta", text: reply });
+        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pdfkit.local"], executor: "claude" });
+      } else {
+        sseWrite(res, { type: "tool_start", names: ["claude.messages", "claude.web_search"] });
+        const result = await generateClaudeReply({
+          history,
+          systemPrompt: JARVIS_SYSTEM_PROMPT,
+          userMessage,
+          attachments,
+          useWebSearch: true,
+        });
+        const reply = appendClaudeCitations(result.reply, result.citations);
+        sseWrite(res, { type: "tool_end", names: result.tools_used.length ? result.tools_used : ["claude.messages"] });
+        if (context.persist) {
+          await appendXavierMessage({
+            userId: context.userId,
+            conversationId: context.conversation.id,
+            channel: "web",
+            role: "assistant",
+            content: reply,
+          });
+          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+            console.warn("[xavier-memory] Claude maintenance failed", (error as Error).message);
+          });
+        }
+        sseWrite(res, { type: "delta", text: reply });
+        sseWrite(res, { type: "done", reply, tools_used: result.tools_used, citations: result.citations, model: result.model, executor: "claude" });
+      }
+    } catch (error) {
+      sseWrite(res, { type: "error", message: (error as Error).message });
+    } finally {
+      cleanup();
+      try { res.end(); } catch {}
+    }
+    return;
+  }
+
+  if (!llmKey) {
+    sseWrite(res, { type: "error", message: "Nenhum executor configurado no servidor" });
+    cleanup();
+    try { res.end(); } catch {}
+    return;
+  }
+
   // Pré-busca paralela: avisa a UI antes (tool_start) e depois (tool_end).
   const intent = detectBriefingIntent(userMessage);
   let prefetchedSystemMsg: { role: "system"; content: string } | null = null;
@@ -864,64 +955,6 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     ...cleanedHistory,
     userTurn,
   ];
-
-  // Heartbeat para manter a conexão viva atrás de proxies que matam idle.
-  const heartbeat = setInterval(() => {
-    try { res.write(":hb\n\n"); } catch {}
-  }, 15_000);
-  const cleanup = () => clearInterval(heartbeat);
-  req.on("close", cleanup);
-
-  const manusRequest = routeManusTaskRequest(userMessage, payload.engine || "auto");
-  if (context.persist && manusRequest) {
-    try {
-      const task = await createManusTask({
-        userId: context.userId,
-        channel: "web",
-        conversationId: context.conversation.id,
-      }, manusRequest.requestText, { title: manusRequest.title });
-      const acknowledgement = buildManusAcknowledgement(task);
-      await appendXavierMessage({
-        userId: context.userId,
-        conversationId: context.conversation.id,
-        channel: "web",
-        role: "assistant",
-        content: acknowledgement,
-      });
-      sseWrite(res, { type: "task_start", task_id: task.id, manus_task_id: task.manus_task_id, task_url: task.task_url, status: task.status });
-      sseWrite(res, { type: "delta", text: acknowledgement });
-      sseWrite(res, { type: "done", reply: acknowledgement, tools_used: ["manus_task.create"], async_task: true, task_id: task.id });
-    } catch (error) {
-      if (!isPdfTaskRequest(userMessage)) {
-        sseWrite(res, { type: "error", message: (error as Error).message });
-      } else {
-        try {
-          const { reply, attachment } = await buildLocalPdfResult({
-            userId: context.userId,
-            taskId: `web-${context.conversation.id}-${Date.now()}`,
-            requestText: userMessage,
-            history,
-          });
-          await appendXavierMessage({
-            userId: context.userId,
-            conversationId: context.conversation.id,
-            channel: "web",
-            role: "assistant",
-            content: reply,
-          });
-          sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
-          sseWrite(res, { type: "delta", text: reply });
-          sseWrite(res, { type: "done", reply, tools_used: ["pdfkit.local"] });
-        } catch (fallbackError) {
-          sseWrite(res, { type: "error", message: (fallbackError as Error).message });
-        }
-      }
-    } finally {
-      cleanup();
-      try { res.end(); } catch {}
-    }
-    return;
-  }
 
   if (context.persist && isPdfTaskRequest(userMessage)) {
     try {
