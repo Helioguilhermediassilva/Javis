@@ -31,3 +31,7 @@ Após o deployment `ba72ae5` aparecer como `Ready`, foi enviado um POST JSON de 
 Os quatro probes públicos confirmaram o contrato do callback: corpo vazio, `{}` e `{"event_type":"test"}` retornam HTTP 200; um evento `task_stopped` sem assinatura retorna HTTP 401. Portanto, o endpoint aceita a verificação e continua protegendo eventos reais.
 
 A chave `MANUS_API_KEY` não está disponível no ambiente local desta sessão, então não foi possível executar `webhook.create` ou `webhook.list` diretamente sem solicitar a credencial do usuário. A documentação oficial também expõe `webhook.list` para checar duplicidade antes de tentar criar outro registro: https://open.manus.ai/docs/v2/webhook.list.
+
+## Verificação do Vercel
+
+Na página de variáveis do projeto `javis`, a variável `MANUS_API_KEY` aparece criada e marcada para `Production` e `Preview` (adicionada há aproximadamente 15 minutos). O valor não foi aberto nem registrado. Como a API Manus retornou `unauthenticated / invalid api key` no teste do usuário, a presença da variável não confirma que o conteúdo seja uma chave Manus válida; é necessário substituir o valor por uma API key recém-criada no painel da Manus e fazer novo redeploy.
