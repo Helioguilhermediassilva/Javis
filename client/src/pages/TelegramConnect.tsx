@@ -37,6 +37,25 @@ interface TelegramStatus {
   error?: string;
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "";
+}
+
+function isTechnicalWebhookMessage(message: string): boolean {
+  return /wrong response from the webhook|500 internal server error|webhook.*(5\d\d|failed|failure)/i.test(message);
+}
+
+function friendlyTelegramError(error: unknown, fallback: string): string {
+  const message = getErrorMessage(error);
+  if (isTechnicalWebhookMessage(message)) return "Não foi possível atualizar o status do Telegram agora. Tente novamente em alguns instantes.";
+  return message || fallback;
+}
+
+function webhookNotice(status: TelegramStatus | null): string | null {
+  const message = status?.webhook?.last_error_message || status?.error || "";
+  return message && !isTechnicalWebhookMessage(message) ? message : null;
+}
+
 export default function TelegramConnect() {
   const [, navigate] = useLocation();
   const { user, signOut } = useAuth();
@@ -53,7 +72,7 @@ export default function TelegramConnect() {
       setLoading(true);
       setStatus(await xavierApi<TelegramStatus>("/api/telegram/status"));
     } catch (error) {
-      setFeedback({ type: "error", text: error instanceof Error ? error.message : "Não foi possível consultar a conexão." });
+      setFeedback({ type: "error", text: friendlyTelegramError(error, "Não foi possível consultar a conexão.") });
     } finally {
       setLoading(false);
     }
@@ -82,7 +101,7 @@ export default function TelegramConnect() {
       });
       await loadStatus();
     } catch (error) {
-      setFeedback({ type: "error", text: error instanceof Error ? error.message : "Não foi possível conectar o bot." });
+      setFeedback({ type: "error", text: friendlyTelegramError(error, "Não foi possível conectar o bot.") });
     } finally {
       setBusy(false);
     }
@@ -97,7 +116,7 @@ export default function TelegramConnect() {
       setStatus({ connected: false });
       setFeedback({ type: "success", text: "Bot desconectado. O histórico permanece associado à sua conta até ser apagado." });
     } catch (error) {
-      setFeedback({ type: "error", text: error instanceof Error ? error.message : "Não foi possível desconectar o bot." });
+      setFeedback({ type: "error", text: friendlyTelegramError(error, "Não foi possível desconectar o bot.") });
     } finally {
       setBusy(false);
     }
@@ -187,7 +206,7 @@ export default function TelegramConnect() {
                   </div>
                 </div>}
 
-                {(status.webhook?.last_error_message || status.error) && <div className="mt-4 border-t border-[#ff3355]/20 pt-3 text-xs text-[#ff9aac]">{status.webhook?.last_error_message || status.error}</div>}
+                {webhookNotice(status) && <div className="mt-4 border-t border-[#ff3355]/20 pt-3 text-xs text-[#ff9aac]">{webhookNotice(status)}</div>}
               </div>
             ) : (
               <div>
