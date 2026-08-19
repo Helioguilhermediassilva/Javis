@@ -12,6 +12,7 @@ import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../se
 import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
 import { isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
+import { handleXavierCrmRequest } from "../../server/xavierCrmAgent.js";
 import {
   decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
@@ -208,6 +209,29 @@ async function processPerUserTelegramMessage(input: {
     });
     if (!inserted) return;
 
+    const crmResult = await handleXavierCrmRequest(connection.user_id, text);
+    if (crmResult.handled) {
+      const reply = crmResult.reply || "Registro CRM processado.";
+      console.info("[telegram:xavier] CRM request handled", {
+        updateId: update.update_id,
+        action: crmResult.intent.action,
+        entity: crmResult.intent.entity,
+      });
+      await appendXavierMessage({
+        userId: connection.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: reply,
+        telegramMessageId: message.message_id,
+      });
+      await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
+        console.warn("[xavier-memory] Telegram CRM maintenance failed", (error as Error).message);
+      });
+      await sendXavierTelegramMessage(connection, chatId, reply);
+      return;
+    }
+
     if (!isClaudeConfigured()) {
       await sendXavierTelegramMessage(connection, chatId, "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
       return;
@@ -216,6 +240,12 @@ async function processPerUserTelegramMessage(input: {
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
     const claudeTimeoutMs = audio ? 25_000 : 45_000;
+    console.info("[telegram] request routed", {
+      updateId: update.update_id,
+      requestIsPdf,
+      requestIsPresentation,
+      hasAudio: Boolean(audio),
+    });
     if (requestIsPdf || requestIsPresentation) {
       const attachment = requestIsPdf
         ? await createLocalXavierPdf({
@@ -246,7 +276,7 @@ async function processPerUserTelegramMessage(input: {
         console.warn("[xavier-memory] Telegram artifact maintenance failed", (error as Error).message);
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
-      await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`);
+      await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
       return;
     }
 
@@ -321,6 +351,12 @@ async function processLegacyTelegramMessage(input: {
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
     const claudeTimeoutMs = audio ? 25_000 : 45_000;
+    console.info("[telegram] request routed", {
+      updateId: update.update_id,
+      requestIsPdf,
+      requestIsPresentation,
+      hasAudio: Boolean(audio),
+    });
     if (requestIsPdf || requestIsPresentation) {
       const attachment = requestIsPdf
         ? await createLocalXavierPdf({

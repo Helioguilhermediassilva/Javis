@@ -3,18 +3,20 @@ function normalize(value: string): string {
 }
 
 function isCreationRequest(message: string): boolean {
-  return /\b(?:gere|gerar|crie|criar|faca|fazer|prepare|preparar|monte|montar|elabore|elaborar|produza|produzir|quero|preciso(?:\s+de)?|pedi|pe[çc]a|peca|envie|enviar|manda|mandar|transforme|converter)\b/i.test(normalize(message));
+  const text = normalize(message);
+  return /\b(?:gere|gera|gerar|crie|cria|criar|faca|faz|fazer|prepare|prepara|preparar|monte|monta|montar|elabore|elabora|elaborar|produza|produz|produzir|quero|preciso(?:\s+de)?|pedi|peca|envie|manda|mandar|enviar|transforme|transformar|converta|converter|desenvolva|desenvolver|construa|construir)\b/i.test(text);
 }
 
 export function isPdfTaskRequest(message: string): boolean {
   const text = normalize(message);
-  return /\bpdf\b/i.test(text) && isCreationRequest(text);
+  if (!/\bpdf\b/i.test(text)) return false;
+  return isCreationRequest(text) || /\b(?:documento|arquivo)\s+(?:em\s+)?pdf\b/i.test(text);
 }
 
 export function isPresentationTaskRequest(message: string): boolean {
   const text = normalize(message);
-  const presentationTerm = /\b(?:apresentacao|slides?|slide\s*deck|deck|powerpoint|pptx?)\b/i.test(text);
-  return presentationTerm && isCreationRequest(text);
+  const presentationTerm = /\b(?:apresentacao|apresentacoes|slides?|slide\s*deck|deck|powerpoint|power\s*point|pptx?)\b/i.test(text);
+  return presentationTerm && (isCreationRequest(text) || /\b(?:arquivo|documento)\s+(?:de\s+)?(?:apresentacao|slides?|powerpoint|pptx?)\b/i.test(text));
 }
 
 export function shouldUseWebSearchForRequest(message: string): boolean {

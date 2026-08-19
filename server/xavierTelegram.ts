@@ -93,6 +93,17 @@ async function telegramApi<T>(token: string, method: string, body?: Record<strin
   return data.result as T;
 }
 
+async function telegramMultipartApi<T>(token: string, method: string, form: FormData): Promise<T> {
+  const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(12_000),
+  });
+  const data = (await response.json().catch(() => ({}))) as TelegramApiResponse<T>;
+  if (!response.ok || !data.ok) throw new Error(data.description || `Telegram ${method} ${response.status}`);
+  return data.result as T;
+}
+
 function getTelegramBotChatUrl(username?: string | null): string | null {
   return username ? `https://t.me/${username}` : null;
 }
@@ -257,12 +268,31 @@ export async function sendXavierTelegramDocument(
   chatId: string,
   documentUrl: string,
   caption?: string,
+  fileName = "xavier-arquivo.bin",
 ): Promise<void> {
   const parsed = new URL(documentUrl);
   if (parsed.protocol !== "https:") throw new Error("Arquivo Telegram precisa usar URL HTTPS");
-  await telegramApi(decryptToken(connection.encrypted_bot_token), "sendDocument", {
-    chat_id: chatId,
-    document: parsed.toString(),
-    caption: caption?.slice(0, 1024),
-  });
+  const token = decryptToken(connection.encrypted_bot_token);
+  try {
+    await telegramApi(token, "sendDocument", {
+      chat_id: chatId,
+      document: parsed.toString(),
+      caption: caption?.slice(0, 1024),
+    });
+    return;
+  } catch (urlError) {
+    console.warn("[telegram:xavier] URL delivery failed; retrying multipart upload", {
+      message: (urlError as Error).message,
+      fileName: fileName.slice(0, 120),
+    });
+  }
+
+  const artifact = await fetch(parsed, { signal: AbortSignal.timeout(12_000) });
+  if (!artifact.ok) throw new Error(`Download do arquivo gerado falhou (${artifact.status})`);
+  const bytes = await artifact.arrayBuffer();
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  if (caption) form.set("caption", caption.slice(0, 1024));
+  form.set("document", new Blob([bytes], { type: artifact.headers.get("content-type") || "application/octet-stream" }), fileName.slice(0, 120));
+  await telegramMultipartApi(token, "sendDocument", form);
 }

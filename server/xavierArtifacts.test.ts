@@ -5,6 +5,8 @@ import { renderXavierPresentationBuffer } from "./xavierPresentation.js";
 describe("xavier artifacts", () => {
   it("reconhece solicitações explícitas de PDF", () => {
     expect(isPdfTaskRequest("Gere um PDF com o resumo executivo")).toBe(true);
+    expect(isPdfTaskRequest("Faz um PDF pra mim")).toBe(true);
+    expect(isPdfTaskRequest("Me manda um documento em PDF")).toBe(true);
     expect(isPdfTaskRequest("Explique o que é PDF")).toBe(false);
   });
 
@@ -12,6 +14,8 @@ describe("xavier artifacts", () => {
     expect(isPresentationTaskRequest("Crie uma apresentação para a prefeitura")).toBe(true);
     expect(isPresentationTaskRequest("Monte slides sobre o projeto Xavier")).toBe(true);
     expect(isPresentationTaskRequest("Gere um PowerPoint com os próximos passos")).toBe(true);
+    expect(isPresentationTaskRequest("Me envie uma apresentação")).toBe(true);
+    expect(isPresentationTaskRequest("Quero um arquivo de slides")).toBe(true);
     expect(isPresentationTaskRequest("O que é uma apresentação executiva?")).toBe(false);
   });
 
