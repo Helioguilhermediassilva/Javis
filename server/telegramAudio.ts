@@ -88,7 +88,7 @@ async function getTelegramFilePath(token: string, fileId: string): Promise<strin
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ file_id: fileId }),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(8_000),
   });
   const payload = (await response.json().catch(() => ({}))) as TelegramApiResponse<TelegramFile>;
   if (!response.ok || !payload.ok || !payload.result?.file_path) {
@@ -103,7 +103,7 @@ async function downloadTelegramAudio(token: string, reference: TelegramAudioRefe
   }
   const filePath = await getTelegramFilePath(token, reference.fileId);
   const response = await fetch(`${TELEGRAM_API_BASE}/file/bot${encodeURIComponent(token)}/${filePath}`, {
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(15_000),
   });
   if (!response.ok) throw new Error(`Download do áudio Telegram falhou: HTTP ${response.status}`);
   const bytes = Buffer.from(await response.arrayBuffer());
@@ -126,7 +126,7 @@ export async function transcribeTelegramAudio(token: string, reference: Telegram
     method: "POST",
     headers: { "xi-api-key": apiKey },
     body: form,
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(25_000),
   });
   const payload = (await response.json().catch(() => ({}))) as ElevenLabsTranscript & { detail?: unknown };
   if (!response.ok) {

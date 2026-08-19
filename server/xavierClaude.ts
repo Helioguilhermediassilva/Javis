@@ -159,6 +159,7 @@ export async function generateClaudeReply(input: {
   attachments?: ClaudeAttachment[];
   useWebSearch?: boolean;
   maxTokens?: number;
+  timeoutMs?: number;
 }): Promise<ClaudeReply> {
   const apiKey = (process.env.ANTHROPIC_API_KEY || "").trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY não configurada no servidor");
@@ -187,7 +188,7 @@ export async function generateClaudeReply(input: {
       "anthropic-version": ANTHROPIC_VERSION,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(110_000),
+    signal: AbortSignal.timeout(Math.min(Math.max(input.timeoutMs || 110_000, 5_000), 110_000)),
   });
   const raw = await response.text();
   let payload: ClaudeApiResponse;
