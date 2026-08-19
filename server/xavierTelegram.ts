@@ -237,6 +237,13 @@ export function decryptXavierTelegramToken(connection: StoredConnection): string
   return decryptToken(connection.encrypted_bot_token);
 }
 
+export async function sendXavierTelegramTyping(connection: StoredConnection, chatId: string): Promise<void> {
+  await telegramApi(decryptToken(connection.encrypted_bot_token), "sendChatAction", {
+    chat_id: chatId,
+    action: "typing",
+  });
+}
+
 export async function sendXavierTelegramMessage(connection: StoredConnection, chatId: string, text: string): Promise<void> {
   await telegramApi(decryptToken(connection.encrypted_bot_token), "sendMessage", {
     chat_id: chatId,

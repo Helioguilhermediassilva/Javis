@@ -3,7 +3,9 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import {
   applyManusWebhookEvent,
   buildManusResultText,
+  isPdfTaskRequest,
   markManusTaskDelivered,
+  persistManusTaskAttachments,
   verifyManusWebhookSignature,
 } from "../../server/xavierManus.js";
 import {
@@ -11,6 +13,7 @@ import {
   sendXavierTelegramDocument,
   sendXavierTelegramMessage,
 } from "../../server/xavierTelegram.js";
+import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { appendXavierMessage } from "../../server/xavierMemory.js";
 
 export const config = {
@@ -47,9 +50,26 @@ async function deliverTelegramResult(task: Awaited<ReturnType<typeof applyManusW
     console.warn("[manus-webhook] Telegram connection unavailable", task.telegram_connection_id);
     return;
   }
-  const result = buildManusResultText(task);
+  let taskForDelivery = task;
+  if (task.status === "completed" && !task.attachments?.length && isPdfTaskRequest(task.request_text) && task.result_text?.trim()) {
+    try {
+      const fallbackAttachment = await createXavierPdfAttachment({
+        userId: task.user_id,
+        taskId: `${task.id}-local-pdf`,
+        title: "Documento gerado pelo Xavier",
+        body: task.result_text,
+      });
+      const attachments = [fallbackAttachment];
+      await persistManusTaskAttachments(task.user_id, task.id, attachments);
+      taskForDelivery = { ...task, attachments };
+      console.warn("[manus-webhook] local PDF fallback created", task.id);
+    } catch (error) {
+      console.warn("[manus-webhook] local PDF fallback failed", task.id, (error as Error).message);
+    }
+  }
+  const result = buildManusResultText(taskForDelivery);
   await sendXavierTelegramMessage(connection, task.telegram_chat_id, result);
-  for (const attachment of task.attachments || []) {
+  for (const attachment of taskForDelivery.attachments || []) {
     try {
       await sendXavierTelegramDocument(connection, task.telegram_chat_id, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`);
     } catch (error) {

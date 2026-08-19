@@ -47,6 +47,8 @@ export interface JarvisStreamEvents {
   onToolEnd?: (names: string[]) => void;
   /** Quando uma tarefa assíncrona Manus é criada. */
   onTaskStart?: (task: { taskId: string; manusTaskId: string; taskUrl: string | null; status: string }) => void;
+  /** Arquivo gerado pelo Xavier durante o processamento. */
+  onFile?: (file: { file_name: string; url: string; size_bytes?: number }) => void;
   /** Resposta final consolidada (mesmo conteúdo dos deltas concatenados). */
   onDone?: (reply: string, toolsUsed: string[]) => void;
   /** Erro fatal reportado pelo servidor durante o stream. */
@@ -60,7 +62,7 @@ export interface JarvisChatStreamOptions extends JarvisChatOptions, JarvisStream
  * disparando callbacks granulares. Resolve com a resposta final.
  */
 export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<string> {
-  const { history, userMessage, attachments, honorific, engine, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onDone, onError } = opts;
+  const { history, userMessage, attachments, honorific, engine, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onFile, onDone, onError } = opts;
   const resp = await fetch("/api/jarvis/chat/stream", {
     method: "POST",
     signal,
@@ -92,7 +94,7 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
           if (!data) continue;
-          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string; task_id?: string; manus_task_id?: string; task_url?: string | null; status?: string };
+          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string; task_id?: string; manus_task_id?: string; task_url?: string | null; status?: string; file_name?: string; url?: string; size_bytes?: number };
           try { evt = JSON.parse(data); } catch { continue; }
           if (evt.type === "delta" && typeof evt.text === "string") {
             onDelta?.(evt.text);
@@ -102,6 +104,8 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
             onToolEnd?.(evt.names);
           } else if (evt.type === "task_start" && evt.task_id && evt.manus_task_id) {
             onTaskStart?.({ taskId: evt.task_id, manusTaskId: evt.manus_task_id, taskUrl: evt.task_url || null, status: evt.status || "running" });
+          } else if (evt.type === "file" && evt.file_name && evt.url) {
+            onFile?.({ file_name: evt.file_name, url: evt.url, size_bytes: evt.size_bytes });
           } else if (evt.type === "done") {
             finalReply = (evt.reply || "").trim();
             toolsUsed = Array.isArray(evt.tools_used) ? evt.tools_used : [];

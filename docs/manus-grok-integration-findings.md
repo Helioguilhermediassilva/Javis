@@ -83,3 +83,11 @@ Validação local: TypeScript sem erros; 8 testes do roteador Manus e webhook Te
 
 Referência oficial do formato de anexos `task_stopped`: https://open.manus.ai/docs/v2/webhooks-overview
 
+## Política de fontes externas — decisão final
+
+O Javis não implementa conectores diretos para YouTube, Google, Instagram ou TikTok. Quando uma solicitação exigir pesquisa nessas fontes, o roteador deve encaminhá-la para a Manus/SUN como tarefa agentic, mantendo o Grok como cérebro conversacional imediato.
+
+A tarefa Manus deve receber somente o pedido e o contexto mínimo necessário, incluindo cidade ou região quando informado pelo usuário. O resultado deve retornar uma síntese em português, distinguir fatos de inferências, incluir URLs de referência quando disponíveis e respeitar as permissões e limitações de acesso da fonte. O backend do Xavier não deve armazenar tokens dessas plataformas, copiar histórico bruto desnecessário ou tentar reproduzir APIs de pesquisa que pertencem à camada Manus.
+
+A única exceção atualmente mantida no caminho do Grok é o `x_search` já usado pelo briefing social configurado para o Distrito Federal. Esse caminho não representa uma integração direta com YouTube, Google, Instagram ou TikTok e não deve ser expandido para substituir a pesquisa agentic da Manus.
+

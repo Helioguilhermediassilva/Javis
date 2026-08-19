@@ -2,15 +2,19 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { generateJarvisReply, JarvisChatError, type ChatPayload } from "../../server/jarvisProxy.js";
 import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegramHistory.js";
 import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../server/telegramAudio.js";
+import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import {
   decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
+  sendXavierTelegramDocument,
   sendXavierTelegramMessage,
+  sendXavierTelegramTyping,
   verifyXavierTelegramWebhookSecret,
 } from "../../server/xavierTelegram.js";
 import {
   buildManusAcknowledgement,
   createManusTask,
+  isPdfTaskRequest,
   routeManusTaskRequest,
 } from "../../server/xavierManus.js";
 import {
@@ -90,6 +94,25 @@ async function sendLegacyTelegramText(chatId: string, text: string): Promise<voi
   }
 }
 
+async function createLocalXavierPdf(input: {
+  userId: string;
+  taskId: string;
+  requestText: string;
+  history: ChatPayload["history"];
+}): Promise<{ file_name: string; url: string; size_bytes: number }> {
+  const content = await generateJarvisReply({
+    history: input.history,
+    userMessage: `Prepare o conteúdo completo para um documento PDF em português. Não explique limitações e não diga que não pode gerar arquivos; escreva diretamente o conteúdo solicitado, com título e seções claras quando fizer sentido. Pedido original: ${input.requestText}`,
+    honorific: "senhor",
+  });
+  return createXavierPdfAttachment({
+    userId: input.userId,
+    taskId: input.taskId,
+    title: "Documento solicitado ao Xavier",
+    body: content.reply,
+  });
+}
+
 function isTelegramUpdate(value: unknown): value is TelegramUpdate {
   return Boolean(value && typeof value === "object");
 }
@@ -123,6 +146,9 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
   }
 
   try {
+    await sendXavierTelegramTyping(connection, chatId).catch((error) => {
+      console.warn("[telegram:xavier] typing indicator failed", (error as Error).message);
+    });
     if (audio) {
       const transcription = await transcribeTelegramAudio(decryptXavierTelegramToken(connection), audio);
       text = text ? `${text}\n\n[Áudio transcrito]\n${transcription}` : transcription;
@@ -168,24 +194,54 @@ async function handlePerUserWebhook(req: VercelRequest, res: VercelResponse, con
 
     const manusRequest = routeManusTaskRequest(text, "auto");
     if (manusRequest) {
-      const task = await createManusTask({
+      try {
+        const task = await createManusTask({
+          userId: connection.user_id,
+          channel: "telegram",
+          conversationId: conversation.id,
+          telegramConnectionId: connection.id,
+          telegramChatId: chatId,
+        }, manusRequest.requestText, { title: manusRequest.title });
+        const acknowledgement = buildManusAcknowledgement(task);
+        await appendXavierMessage({
+          userId: connection.user_id,
+          conversationId: conversation.id,
+          channel: "telegram",
+          role: "assistant",
+          content: acknowledgement,
+          telegramMessageId: message.message_id,
+        });
+        await sendXavierTelegramMessage(connection, chatId, acknowledgement);
+        json(res, 202, { ok: true, async_task: true, task_id: task.id });
+        return;
+      } catch (error) {
+        if (!isPdfTaskRequest(text)) throw error;
+        console.warn("[telegram:xavier] Manus PDF task failed; using local fallback", (error as Error).message);
+      }
+    }
+
+    if (isPdfTaskRequest(text)) {
+      const attachment = await createLocalXavierPdf({
         userId: connection.user_id,
-        channel: "telegram",
-        conversationId: conversation.id,
-        telegramConnectionId: connection.id,
-        telegramChatId: chatId,
-      }, manusRequest.requestText, { title: manusRequest.title });
-      const acknowledgement = buildManusAcknowledgement(task);
+        taskId: `telegram-${connection.id}-${message.message_id}`,
+        requestText: text,
+        history: previousHistory,
+      });
+      const reply = `Preparei o PDF solicitado e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendXavierMessage({
         userId: connection.user_id,
         conversationId: conversation.id,
         channel: "telegram",
         role: "assistant",
-        content: acknowledgement,
+        content: reply,
         telegramMessageId: message.message_id,
       });
-      await sendXavierTelegramMessage(connection, chatId, acknowledgement);
-      json(res, 202, { ok: true, async_task: true, task_id: task.id });
+      await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
+        console.warn("[xavier-memory] Telegram PDF maintenance failed", (error as Error).message);
+      });
+      await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`);
+      json(res, 200, { ok: true, local_pdf: true, attachment });
       return;
     }
 
@@ -233,6 +289,9 @@ async function handleLegacyWebhook(req: VercelRequest, res: VercelResponse): Pro
   if (allowed && !allowed.has(chatId)) { console.warn("[telegram] chat bloqueado", chatId); json(res, 200, { ok: true, ignored: true }); return; }
 
   try {
+    await legacyTelegramApi("sendChatAction", { chat_id: chatId, action: "typing" }).catch((error) => {
+      console.warn("[telegram] typing indicator failed", (error as Error).message);
+    });
     if (audio) {
       text = text
         ? `${text}\n\n[Áudio transcrito]\n${await transcribeTelegramAudio(process.env.TELEGRAM_BOT_TOKEN || "", audio)}`
@@ -246,6 +305,20 @@ async function handleLegacyWebhook(req: VercelRequest, res: VercelResponse): Pro
     const previousHistory = await loadTelegramHistory(chatId, 20);
     const inserted = await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "user", content: text, telegramMessageId: message.message_id, telegramUpdateId: update.update_id });
     if (!inserted) { json(res, 200, { ok: true, duplicate: true }); return; }
+    if (isPdfTaskRequest(text)) {
+      const attachment = await createLocalXavierPdf({
+        userId: `legacy-${chatId}`,
+        taskId: `telegram-${chatId}-${message.message_id}`,
+        requestText: text,
+        history: previousHistory,
+      });
+      const reply = `Preparei o PDF solicitado e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
+      await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
+      await sendLegacyTelegramText(chatId, reply);
+      await legacyTelegramApi("sendDocument", { chat_id: chatId, document: attachment.url, caption: `Arquivo gerado pelo Xavier: ${attachment.file_name}` });
+      json(res, 200, { ok: true, local_pdf: true, attachment });
+      return;
+    }
     const result = await generateJarvisReply({ history: previousHistory, userMessage: text, honorific: "senhor" });
     await appendTelegramMessage({ chatId, telegramUserId: telegramUser?.id, telegramUsername: telegramUser?.username, role: "assistant", content: result.reply, telegramMessageId: message.message_id, telegramUpdateId: undefined });
     await sendLegacyTelegramText(chatId, result.reply);

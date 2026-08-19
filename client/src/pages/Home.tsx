@@ -145,6 +145,11 @@ export default function Home() {
         onToolStart: (names) => {
           setLogs((l) => [...l, `SYS: consultando fontes (${names.join(", ")})...`]);
         },
+        onFile: (file) => {
+          const attachment: XavierManusTaskAttachment = { file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
+          setGeneratedFiles((files) => [attachment, ...files].filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index).slice(0, 8));
+          setLogs((l) => [...l, `SYS: PDF gerado — ${file.file_name}`]);
+        },
         onTaskStart: ({ taskId }) => {
           setLogs((l) => [...l, "SYS: tarefa profunda encaminhada à Manus/SUN; aguardando conclusão..."]);
           void waitForXavierManusTask(taskId, (task) => {

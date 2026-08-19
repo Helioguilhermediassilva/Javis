@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildManusAcknowledgement,
   detectManusTaskRequest,
+  isPdfTaskRequest,
   routeManusTaskRequest,
 } from "./xavierManus";
 
@@ -29,6 +30,11 @@ describe("Xavier Manus router", () => {
   it("respeita a escolha explícita de Grok", () => {
     process.env.MANUS_API_KEY = "test-key";
     expect(routeManusTaskRequest("/manus investigue o tema", "grok")).toBeNull();
+  });
+
+  it("identifica pedidos de PDF e rejeita conversa comum", () => {
+    expect(isPdfTaskRequest("gere um PDF com o relatório executivo")).toBe(true);
+    expect(isPdfTaskRequest("Você pode explicar o que é PDF?")).toBe(false);
   });
 
   it("detecta somente pedidos explícitos ou claramente profundos", () => {

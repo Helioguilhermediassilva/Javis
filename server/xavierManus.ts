@@ -179,6 +179,10 @@ export function routeManusTaskRequest(message: string, engine: "auto" | "grok" |
   return explicit || isManusConfigured() ? detected : null;
 }
 
+export function isPdfTaskRequest(message: string): boolean {
+  return /\bpdf\b/i.test(message) && Boolean(detectManusTaskRequest(message));
+}
+
 export function detectManusTaskRequest(message: string): { requestText: string; title: string } | null {
   const raw = message.trim();
   if (!raw) return null;
@@ -200,7 +204,7 @@ export function detectManusTaskRequest(message: string): { requestText: string; 
 export async function createManusTask(input: XavierManusTaskContext, requestText: string, options: ManusTaskCreationOptions = {}): Promise<XavierManusTask> {
   const normalized = requestText.trim().slice(0, 12_000);
   if (!normalized) throw new ManusIntegrationError(400, "A tarefa Manus não pode estar vazia");
-  const pdfRequested = /\bpdf\b/i.test(normalized);
+  const pdfRequested = isPdfTaskRequest(normalized);
   const manusPrompt = pdfRequested
     ? `${normalized}\n\nInstrução adicional: gere o resultado como um arquivo PDF real, anexe o PDF ao concluir e informe brevemente o que foi produzido. Não responda apenas que não pode gerar arquivos.`
     : normalized;
@@ -276,6 +280,16 @@ export async function markManusTaskDelivered(userId: string, taskId: string): Pr
     body: JSON.stringify({ delivered_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
   });
   if (!response.ok) throw new Error(`Supabase Manus task delivery ${response.status}: ${(await response.text()).slice(0, 300)}`);
+}
+
+export async function persistManusTaskAttachments(userId: string, taskId: string, attachments: XavierManusAttachment[]): Promise<void> {
+  const params = new URLSearchParams({ user_id: `eq.${userId}`, id: `eq.${taskId}` });
+  const response = await supabaseRequest(`${TASK_TABLE}?${params}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ attachments: normalizeAttachments(attachments), updated_at: new Date().toISOString() }),
+  });
+  if (!response.ok) throw new Error(`Supabase Manus task attachments ${response.status}: ${(await response.text()).slice(0, 300)}`);
 }
 
 async function findTaskByManusId(manusTaskId: string): Promise<XavierManusTask | null> {
