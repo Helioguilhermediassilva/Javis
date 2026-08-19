@@ -64,7 +64,7 @@ A *tool* `buscar_dados_df` consulta o endpoint `package_search` do CKAN, devolve
 
 ### X (antigo Twitter) — via Grok
 
-O JARVIS não fala com o X diretamente; **toda inteligência social vem do Grok**. A ferramenta `x_search` é uma capacidade *server-side* nativa da Responses API da xAI: o modelo recebe permissão para consultar postagens do X dentro de uma janela temporal e devolve, na própria resposta, um resumo já analisado pelo Grok. O JARVIS configura essa janela para **os últimos 3 dias** (`from_date` dinâmico) — três dias é suficiente para captar o pulso do momento sem deixar o modelo trabalhar com material velho.
+O XAVIER não fala com o X diretamente; **toda inteligência social vem do Grok**. A ferramenta `x_search` é uma capacidade *server-side* nativa da Responses API da xAI: o modelo recebe permissão para consultar postagens do X dentro de uma janela temporal e devolve, na própria resposta, um resumo já analisado pelo Grok. O JARVIS configura essa janela para **os últimos 3 dias** (`from_date` dinâmico) — três dias é suficiente para captar o pulso do momento sem deixar o modelo trabalhar com material velho.
 
 A *tool* `sentimento_social_df` separa o que o Grok devolve em três blocos estruturados — **reclamações**, **elogios** e **mentions emergentes** — e cacheia o resultado por chave normalizada (sem acentos, sem *stopwords* portuguesas, tópico ordenado). Isso significa que “saúde no DF”, “Saúde no Distrito Federal” e “saude DF” caem todos no mesmo *bucket* de cache, com TTL de poucos minutos.
 
