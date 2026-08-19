@@ -42,6 +42,20 @@ function requestUrl(req: VercelRequest): string {
   return `${protocol}://${host}${req.url || "/api/manus/webhook"}`;
 }
 
+function isManusVerificationProbe(rawBody: string): boolean {
+  if (!rawBody.trim()) return true;
+  try {
+    const payload = JSON.parse(rawBody) as unknown;
+    if (!payload || typeof payload !== "object") return false;
+    const record = payload as Record<string, unknown>;
+    const eventType = typeof record.event_type === "string" ? record.event_type.toLowerCase() : "";
+    if (["test", "webhook_test", "verification", "ping"].includes(eventType)) return true;
+    return record.event_type === undefined && record.task_detail === undefined;
+  } catch {
+    return false;
+  }
+}
+
 async function deliverTelegramResult(task: Awaited<ReturnType<typeof applyManusWebhookEvent>>): Promise<void> {
   if (!task || task.channel !== "telegram" || task.status === "running" || task.delivered_at) return;
   if (!task.telegram_connection_id || !task.telegram_chat_id) return;
@@ -98,6 +112,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
   try {
     const rawBody = await readRawBody(req as IncomingMessage);
+    if (!header(req, "x-webhook-signature") && isManusVerificationProbe(rawBody)) {
+      res.status(200).json({ ok: true, verification: true });
+      return;
+    }
     const signature = header(req, "x-webhook-signature");
     const timestamp = header(req, "x-webhook-timestamp");
     const valid = await verifyManusWebhookSignature(rawBody, signature, timestamp, requestUrl(req));
