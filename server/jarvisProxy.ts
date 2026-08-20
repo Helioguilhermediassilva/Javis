@@ -26,7 +26,16 @@ import {
   generateClaudeReply,
   isClaudeConfigured,
   shouldUseClaudeTask,
+  type ClaudeAttachment,
 } from "./xavierClaude.js";
+import {
+  getXavierFile,
+  isEditableXavierFile,
+  isFileEditRequest,
+  loadXavierClaudeAttachment,
+  persistEditedXavierFile,
+  type XavierFileRecord,
+} from "./xavierFiles.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
@@ -387,12 +396,15 @@ interface AttachmentRef {
   data: string;
   // Display name for context
   name?: string;
+  // ID do arquivo privado persistido na sessão.
+  fileId?: string;
 }
 
 export interface ChatPayload {
   history?: ChatMessage[];
   userMessage?: string;
   attachments?: AttachmentRef[];
+  active_file_id?: string;
   honorific?: "senhor" | "senhora";
   engine?: "auto" | "grok" | "manus" | "claude";
   locale?: SentimentLocale;
@@ -679,6 +691,57 @@ function persistedUserContent(payload: ChatPayload): string {
   return `${text}${attachmentNames ? `${text ? " " : ""}${attachmentNames}` : ""}`.trim() || "[anexo]";
 }
 
+interface ActiveXavierFileContext {
+  record: XavierFileRecord;
+  attachment: ClaudeAttachment;
+}
+
+async function resolveActiveXavierFile(payload: ChatPayload, context: AuthenticatedWebChatContext): Promise<ActiveXavierFileContext | null> {
+  if (!context.persist) return null;
+  const attachmentFileId = payload.attachments?.find((attachment) => attachment && typeof attachment.fileId === "string")?.fileId;
+  const fileId = typeof payload.active_file_id === "string" && payload.active_file_id.trim()
+    ? payload.active_file_id.trim()
+    : attachmentFileId;
+  if (!fileId) return null;
+  const record = await getXavierFile(context.userId, context.conversation.id, fileId);
+  if (!record) throw new JarvisChatError(404, "Arquivo não encontrado na sessão atual.");
+  const loaded = await loadXavierClaudeAttachment(record);
+  return {
+    record,
+    attachment: {
+      kind: loaded.kind === "document" ? "document" : loaded.kind,
+      data: loaded.data,
+      name: loaded.name,
+      mediaType: loaded.mediaType,
+    },
+  };
+}
+
+function claudeAttachments(payload: ChatPayload, activeFile: ActiveXavierFileContext | null): ClaudeAttachment[] {
+  const transient = (payload.attachments || [])
+    .filter((attachment) => attachment && typeof attachment.data === "string" && !attachment.fileId)
+    .slice(0, activeFile ? 3 : 4)
+    .map((attachment) => ({ kind: attachment.kind, data: attachment.data, name: attachment.name } as ClaudeAttachment));
+  return activeFile ? [activeFile.attachment, ...transient] : transient;
+}
+
+function localizedFileEditPrompt(basePrompt: string, activeFile: ActiveXavierFileContext | null, userMessage: string): string {
+  if (!activeFile || !isFileEditRequest(userMessage, true)) return basePrompt;
+  if (!isEditableXavierFile(activeFile.record)) {
+    return `${basePrompt}\n\nO arquivo ativo não possui edição binária segura nesta etapa. Explique isso brevemente e não invente uma versão alterada.`;
+  }
+  return `${basePrompt}\n\nVocê está editando o arquivo ativo "${activeFile.record.file_name}". Retorne somente o conteúdo completo e revisado do arquivo, sem prefácio, sem comentários sobre o processo e sem cercas de código. Preserve o formato textual quando possível. O backend salvará sua resposta como uma nova versão vinculada à sessão.`;
+}
+
+async function persistFileEditIfRequested(input: {
+  activeFile: ActiveXavierFileContext | null;
+  userMessage: string;
+  reply: string;
+}): Promise<{ file: XavierFileRecord; url: string } | null> {
+  if (!input.activeFile || !isFileEditRequest(input.userMessage, true) || !isEditableXavierFile(input.activeFile.record)) return null;
+  return persistEditedXavierFile({ source: input.activeFile.record, content: input.reply });
+}
+
 async function prepareAuthenticatedWebChat(req: IncomingMessage): Promise<AuthenticatedWebChatContext> {
   if (isTestCompatibilityRequest(req)) {
     return { userId: "test-user", conversation: { id: "test-conversation" } as XavierConversation, history: [], summary: null, retentionDays: 90, persist: false };
@@ -736,20 +799,25 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         content: persistedUserContent(authenticatedPayload),
       });
     }
+    const activeFile = await resolveActiveXavierFile(authenticatedPayload, context);
+    const fileEditRequested = Boolean(activeFile && isFileEditRequest(authenticatedPayload.userMessage || "", true));
     const requestedEngine = authenticatedPayload.engine || "auto";
-    const claudeTask = shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine);
+    const claudeTask = shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine) || fileEditRequested;
     if (claudeTask && (requestedEngine === "claude" || requestedEngine === "manus") && !isClaudeConfigured()) {
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
     }
-    if (claudeTask && isClaudeConfigured() && !isPdfTaskRequest(authenticatedPayload.userMessage || "")) {
+    if (claudeTask && isClaudeConfigured() && (!isPdfTaskRequest(authenticatedPayload.userMessage || "") || fileEditRequested)) {
       const result = await generateClaudeReply({
         history: context.history,
-        systemPrompt: localizedSystemPrompt(normalizeSentimentLocale(authenticatedPayload.locale)),
+        systemPrompt: localizedFileEditPrompt(localizedSystemPrompt(normalizeSentimentLocale(authenticatedPayload.locale)), activeFile, authenticatedPayload.userMessage || ""),
         userMessage: authenticatedPayload.userMessage || "",
-        attachments: authenticatedPayload.attachments,
-        useWebSearch: true,
+        attachments: claudeAttachments(authenticatedPayload, activeFile),
+        useWebSearch: !fileEditRequested,
       });
-      const reply = appendClaudeCitations(result.reply, result.citations);
+      const editedFile = await persistFileEditIfRequested({ activeFile, userMessage: authenticatedPayload.userMessage || "", reply: result.reply });
+      const reply = editedFile
+        ? `${result.reply}\n\nCriei a nova versão ${editedFile.file.file_name} e a mantive vinculada à sua sessão.`
+        : appendClaudeCitations(result.reply, result.citations);
       if (context.persist) {
         await appendXavierMessage({
           userId: context.userId,
@@ -773,10 +841,18 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         latencyMs: Date.now() - startedAt,
         metadata: { route: "chat_json", executor: "claude", tools: result.tools_used.length },
       });
-      sendJson(res, 200, { reply, tools_used: result.tools_used, timings: [], citations: result.citations, model: result.model, executor: "claude" });
+      sendJson(res, 200, {
+        reply,
+        tools_used: result.tools_used,
+        timings: [],
+        citations: result.citations,
+        model: result.model,
+        executor: "claude",
+        attachments: editedFile ? [{ file_name: editedFile.file.file_name, url: editedFile.url, size_bytes: editedFile.file.size_bytes }] : [],
+      });
       return;
     }
-    if (context.persist && isPdfTaskRequest(authenticatedPayload.userMessage || "")) {
+    if (context.persist && isPdfTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
       const { reply, attachment } = await buildLocalPdfResult({
         userId: context.userId,
         taskId: `web-${context.conversation.id}-${Date.now()}`,
@@ -995,6 +1071,8 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
   const honorificMsg = honorificSystemMessage(payload.honorific);
   let context: AuthenticatedWebChatContext;
+  let activeFile: ActiveXavierFileContext | null = null;
+  let fileEditRequested = false;
   if (!userMessage.trim() && attachments.length === 0) {
     sendJson(res, 400, { error: "userMessage or attachments required" });
     return;
@@ -1002,6 +1080,8 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   try {
     context = await prepareAuthenticatedWebChat(req);
     history = context.persist ? context.history : (Array.isArray(payload.history) ? payload.history : []);
+    activeFile = await resolveActiveXavierFile(payload, context);
+    fileEditRequested = Boolean(activeFile && isFileEditRequest(userMessage, true));
     recordXavierUsageEventDetached({
       userId: context.persist ? context.userId : null,
       requestId,
@@ -1024,11 +1104,12 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     return;
   }
   const cleanedHistory = normalizeChatHistory(history);
+  const inlineAttachments = attachments.filter((attachment) => !attachment.fileId);
   let userTurn: { role: "user"; content: unknown };
-  if (attachments.length > 0) {
+  if (inlineAttachments.length > 0) {
     const parts: Array<Record<string, unknown>> = [];
     parts.push({ type: "text", text: userMessage.trim() || "Please review the attached file(s) and respond." });
-    for (const att of attachments) {
+    for (const att of inlineAttachments) {
       if (!att || typeof att.data !== "string") continue;
       if (att.kind === "image" && att.data.startsWith("data:image/")) {
         parts.push({ type: "image_url", image_url: { url: att.data, detail: "auto" } });
@@ -1075,7 +1156,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   const cleanup = () => clearInterval(heartbeat);
   req.on("close", cleanup);
 
-  const claudeTask = shouldUseClaudeTask(userMessage, payload.engine || "auto");
+  const claudeTask = shouldUseClaudeTask(userMessage, payload.engine || "auto") || fileEditRequested;
   if (claudeTask && (isClaudeConfigured() || payload.engine === "claude" || payload.engine === "manus")) {
     try {
       if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
@@ -1113,15 +1194,18 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
           metadata: { route: "chat_stream", executor: "claude" },
         });
       } else {
-        sseWrite(res, { type: "tool_start", names: ["claude.messages", "claude.web_search"] });
+        sseWrite(res, { type: "tool_start", names: ["claude.messages", ...(fileEditRequested ? [] : ["claude.web_search"])] });
         const result = await generateClaudeReply({
           history,
-          systemPrompt: localizedSystemPrompt(locale),
+          systemPrompt: localizedFileEditPrompt(localizedSystemPrompt(locale), activeFile, userMessage),
           userMessage,
-          attachments,
-          useWebSearch: true,
+          attachments: claudeAttachments(payload, activeFile),
+          useWebSearch: !fileEditRequested,
         });
-        const reply = appendClaudeCitations(result.reply, result.citations);
+        const editedFile = await persistFileEditIfRequested({ activeFile, userMessage, reply: result.reply });
+        const reply = editedFile
+          ? `${result.reply}\n\nCriei a nova versão ${editedFile.file.file_name} e a mantive vinculada à sua sessão.`
+          : appendClaudeCitations(result.reply, result.citations);
         sseWrite(res, { type: "tool_end", names: result.tools_used.length ? result.tools_used : ["claude.messages"] });
         if (context.persist) {
           await appendXavierMessage({
@@ -1135,6 +1219,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
             console.warn("[xavier-memory] Claude maintenance failed", (error as Error).message);
           });
         }
+        if (editedFile) sseWrite(res, { type: "file", file_id: editedFile.file.id, file_name: editedFile.file.file_name, url: editedFile.url, size_bytes: editedFile.file.size_bytes });
         sseWrite(res, { type: "delta", text: reply });
         sseWrite(res, { type: "done", reply, tools_used: result.tools_used, citations: result.citations, model: result.model, executor: "claude" });
         recordXavierUsageEventDetached({

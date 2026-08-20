@@ -19,6 +19,8 @@ export interface AttachmentRef {
   kind: "image" | "text";
   data: string; // data URL for image; raw text excerpt for text
   name?: string;
+  /** Registro persistido da sessão; o servidor recupera o conteúdo privado por este ID. */
+  fileId?: string;
 }
 
 export type Honorific = "senhor" | "senhora";
@@ -41,6 +43,8 @@ export interface JarvisChatOptions {
   locale?: XavierLocale;
   /** Localização escolhida para briefings sociais. */
   location?: XavierLocation;
+  /** Arquivo privado da sessão que deve ser usado como contexto de edição. */
+  activeFileId?: string;
   signal?: AbortSignal;
 }
 
@@ -58,7 +62,7 @@ export interface JarvisStreamEvents {
   /** Compatibilidade legada para eventos de tarefas profundas. */
   onTaskStart?: (task: { taskId: string; manusTaskId: string; taskUrl: string | null; status: string }) => void;
   /** Arquivo gerado pelo Xavier durante o processamento. */
-  onFile?: (file: { file_name: string; url: string; size_bytes?: number }) => void;
+  onFile?: (file: { file_id?: string; file_name: string; url: string; size_bytes?: number }) => void;
   /** Resposta final consolidada (mesmo conteúdo dos deltas concatenados). */
   onDone?: (reply: string, toolsUsed: string[]) => void;
   /** Erro fatal reportado pelo servidor durante o stream. */
@@ -72,12 +76,12 @@ export interface JarvisChatStreamOptions extends JarvisChatOptions, JarvisStream
  * disparando callbacks granulares. Resolve com a resposta final.
  */
 export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<string> {
-  const { history, userMessage, attachments, honorific, engine, locale, location, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onFile, onDone, onError } = opts;
+  const { history, userMessage, attachments, honorific, engine, locale, location, activeFileId, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onFile, onDone, onError } = opts;
   const resp = await fetch("/api/jarvis/chat/stream", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, ...location }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, active_file_id: activeFileId, ...location }),
   });
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => "");
@@ -104,7 +108,7 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
           if (!data) continue;
-          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string; task_id?: string; manus_task_id?: string; task_url?: string | null; status?: string; file_name?: string; url?: string; size_bytes?: number };
+          let evt: { type: string; text?: string; names?: string[]; reply?: string; tools_used?: string[]; message?: string; task_id?: string; manus_task_id?: string; task_url?: string | null; status?: string; file_id?: string; file_name?: string; url?: string; size_bytes?: number };
           try { evt = JSON.parse(data); } catch { continue; }
           if (evt.type === "delta" && typeof evt.text === "string") {
             onDelta?.(evt.text);
@@ -115,7 +119,7 @@ export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<s
           } else if (evt.type === "task_start" && evt.task_id && evt.manus_task_id) {
             onTaskStart?.({ taskId: evt.task_id, manusTaskId: evt.manus_task_id, taskUrl: evt.task_url || null, status: evt.status || "running" });
           } else if (evt.type === "file" && evt.file_name && evt.url) {
-            onFile?.({ file_name: evt.file_name, url: evt.url, size_bytes: evt.size_bytes });
+            onFile?.({ file_id: evt.file_id, file_name: evt.file_name, url: evt.url, size_bytes: evt.size_bytes });
           } else if (evt.type === "done") {
             finalReply = (evt.reply || "").trim();
             toolsUsed = Array.isArray(evt.tools_used) ? evt.tools_used : [];
@@ -171,12 +175,12 @@ export function createSentenceChunker(onSentence: (s: string) => void) {
   };
 }
 
-export async function jarvisChat({ history, userMessage, attachments, honorific, engine, locale, location, signal }: JarvisChatOptions): Promise<string> {
+export async function jarvisChat({ history, userMessage, attachments, honorific, engine, locale, location, activeFileId, signal }: JarvisChatOptions): Promise<string> {
   const resp = await fetch("/api/jarvis/chat", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, ...location }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, active_file_id: activeFileId, ...location }),
   });
 
   if (!resp.ok) {

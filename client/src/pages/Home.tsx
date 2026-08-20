@@ -7,8 +7,8 @@ import SetupOverlay, { loadPrefs, DEFAULT_PREFS, type JarvisPrefs } from "@/comp
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { useElevenLabsTTS } from "@/hooks/useElevenLabsTTS";
-import { jarvisChatStream, fileToAttachment, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
-import type { XavierFileAttachment } from "@/lib/xavierApi";
+import { jarvisChatStream, type ChatMessage, type AttachmentRef } from "@/lib/jarvisLLM";
+import { listXavierSessionFiles, uploadXavierSessionFile, type XavierFileAttachment } from "@/lib/xavierApi";
 import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
@@ -78,6 +78,7 @@ export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
   const [generatedFiles, setGeneratedFiles] = useState<XavierFileAttachment[]>([]);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(true);
   const [clock, setClock] = useState("");
   const [date, setDate] = useState("");
@@ -115,6 +116,22 @@ export default function Home() {
   const pendingAttachmentsRef = useRef<AttachmentRef[]>([]);
   useEffect(() => { pendingAttachmentsRef.current = pendingAttachments; }, [pendingAttachments]);
 
+  useEffect(() => {
+    if (!user?.id) return;
+    const savedFileId = window.sessionStorage.getItem(`xavier-active-file:${user.id}`);
+    if (savedFileId) setActiveFileId(savedFileId);
+    listXavierSessionFiles()
+      .then((files) => {
+        if (savedFileId && files.some((file) => file.id === savedFileId)) return;
+        const latest = files[0];
+        if (latest) {
+          setActiveFileId(latest.id);
+          window.sessionStorage.setItem(`xavier-active-file:${user.id}`, latest.id);
+        }
+      })
+      .catch(() => undefined);
+  }, [user?.id]);
+
   // Process a user command — call LLM and speak the answer in pt-BR
   const processCommand = useCallback(async (text: string) => {
     if (!text.trim() && pendingAttachmentsRef.current.length === 0) return;
@@ -135,6 +152,7 @@ export default function Home() {
         history: historyRef.current,
         userMessage: text,
         attachments: attachmentsToSend.length > 0 ? attachmentsToSend : undefined,
+        activeFileId: activeFileId || undefined,
         honorific: prefsRef.current.honorific,
         locale,
         location,
@@ -154,8 +172,12 @@ export default function Home() {
           setLogs((l) => [...l, t("home.sourceLookup", { sources: names.join(", ") })]);
         },
         onFile: (file) => {
-          const attachment: XavierFileAttachment = { file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
+          const attachment: XavierFileAttachment = { file_id: file.file_id, file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
           setGeneratedFiles((files) => [attachment, ...files].filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index).slice(0, 8));
+          if (file.file_id && user?.id) {
+            setActiveFileId(file.file_id);
+            window.sessionStorage.setItem(`xavier-active-file:${user.id}`, file.file_id);
+          }
           setLogs((l) => [...l, t("home.pdfGenerated", { file: file.file_name })]);
         },
       });
@@ -186,7 +208,7 @@ export default function Home() {
       processingRef.current = false;
       setHudState(mutedRef.current ? "MUTED" : "LISTENING");
     }
-  }, [speakReply, t]);
+  }, [activeFileId, locale, location, speakReply, t]);
 
   // STT em pt-BR. Quando o modo wake-word está ativo, filtramos as falas
   // antes de enviar ao LLM.
@@ -333,22 +355,33 @@ export default function Home() {
     const size = file.size < 1024 ? `${file.size} B` :
       file.size < 1024 * 1024 ? `${(file.size / 1024).toFixed(1)} KB` :
       `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-    setLogs((l) => [...l, t("home.fileLoaded", { file: file.name, size })]);
+    setLogs((l) => [...l, `${t("home.fileLoaded", { file: file.name, size })} — salvando na sessão...`]);
     try {
-      const att = await fileToAttachment(file);
+      const persisted = await uploadXavierSessionFile(file);
+      setActiveFileId(persisted.id);
+      if (user?.id) window.sessionStorage.setItem(`xavier-active-file:${user.id}`, persisted.id);
+      const att: AttachmentRef = {
+        kind: file.type.startsWith("image/") ? "image" : "text",
+        data: `[Arquivo persistido na sessão: ${file.name}]`,
+        name: file.name,
+        fileId: persisted.id,
+      };
       setPendingAttachments([att]);
       setLogs((l) => [...l, t("home.fileReadyToSend", { file: file.name })]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setLogs((l) => [...l, t("home.fileReadError", { error: msg })]);
       setCurrentFile(null);
+      setPendingAttachments([]);
     }
-  }, [t]);
+  }, [t, user?.id]);
 
   const handleFileClear = useCallback(() => {
     setCurrentFile(null);
     setPendingAttachments([]);
-  }, []);
+    setActiveFileId(null);
+    if (user?.id) window.sessionStorage.removeItem(`xavier-active-file:${user.id}`);
+  }, [user?.id]);
 
   // Uptime simulation
   const [uptime, setUptime] = useState("00:00");

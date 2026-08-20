@@ -10,9 +10,10 @@ export interface ClaudeHistoryMessage {
 }
 
 export interface ClaudeAttachment {
-  kind: "image" | "text";
+  kind: "image" | "text" | "document";
   data: string;
   name?: string;
+  mediaType?: string;
 }
 
 export interface ClaudeReply {
@@ -97,6 +98,14 @@ function buildUserContent(userMessage: string, attachments: ClaudeAttachment[]):
     if (attachment.kind === "image") {
       const image = imageContentBlock(attachment.data);
       if (image) blocks.push(image);
+      continue;
+    }
+    if (attachment.kind === "document" && attachment.mediaType === "application/pdf") {
+      blocks.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: attachment.data },
+        title: attachment.name?.slice(0, 120),
+      });
       continue;
     }
     const label = attachment.name ? `[Anexo: ${attachment.name.slice(0, 120)}]\n` : "[Anexo]\n";
