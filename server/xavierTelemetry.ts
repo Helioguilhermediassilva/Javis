@@ -1,4 +1,4 @@
-import { applySupabaseAdminHeaders } from "./supabaseAdmin";
+import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const TABLE = "xavier_usage_events";
