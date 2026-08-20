@@ -22,6 +22,7 @@ import {
 } from "./xavierClaude.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
+import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
@@ -599,6 +600,10 @@ async function prepareAuthenticatedWebChat(req: IncomingMessage): Promise<Authen
 }
 
 export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const requestId = getXavierRequestId(req);
+  const startedAt = Date.now();
+  res.setHeader("X-Request-Id", requestId);
+  let telemetryUserId: string | null = null;
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
     return;
@@ -612,6 +617,15 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
   }
   try {
     const context = await prepareAuthenticatedWebChat(req);
+    telemetryUserId = context.persist ? context.userId : null;
+    recordXavierUsageEventDetached({
+      userId: telemetryUserId,
+      requestId,
+      channel: "web",
+      eventName: "chat_request",
+      status: "started",
+      metadata: { route: "chat_json", engine: String(payload.engine || "auto").slice(0, 32) },
+    });
     const authenticatedPayload = { ...payload, history: context.persist ? context.history : (Array.isArray(payload.history) ? payload.history : []) };
     if (context.persist) {
       await appendXavierMessage({
@@ -648,6 +662,17 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
           console.warn("[xavier-memory] Claude maintenance failed", (error as Error).message);
         });
       }
+      recordXavierUsageEventDetached({
+        userId: telemetryUserId,
+        requestId,
+        channel: "web",
+        eventName: "chat_response",
+        status: "success",
+        provider: "claude",
+        model: result.model,
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_json", executor: "claude", tools: result.tools_used.length },
+      });
       sendJson(res, 200, { reply, tools_used: result.tools_used, timings: [], citations: result.citations, model: result.model, executor: "claude" });
       return;
     }
@@ -668,6 +693,17 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
         console.warn("[xavier-memory] local PDF maintenance failed", (error as Error).message);
       });
+      recordXavierUsageEventDetached({
+        userId: telemetryUserId,
+        requestId,
+        channel: "web",
+        eventName: "artifact_pdf",
+        status: "success",
+        provider: "local",
+        model: "pdf",
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_json" },
+      });
       sendJson(res, 200, { reply, tools_used: ["pdfkit.local"], timings: [], attachments: [attachment], local_pdf: true });
       return;
     }
@@ -684,13 +720,32 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         console.warn("[xavier-memory] maintenance failed", (error as Error).message);
       });
     }
+    recordXavierUsageEventDetached({
+      userId: telemetryUserId,
+      requestId,
+      channel: "web",
+      eventName: "chat_response",
+      status: "success",
+      provider: "grok",
+      model: "grok-4.3",
+      latencyMs: Date.now() - startedAt,
+      metadata: { route: "chat_json", tools: result.tools_used.length },
+    });
     sendJson(res, 200, result);
   } catch (e) {
     const authError = authErrorResponse(e);
     const error = authError
       ? new JarvisChatError(authError.status, authError.message)
       : e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
-    const requestId = getXavierRequestId(req);
+    recordXavierUsageEventDetached({
+      userId: telemetryUserId,
+      requestId,
+      channel: "web",
+      eventName: "chat_error",
+      status: "error",
+      latencyMs: Date.now() - startedAt,
+      metadata: { route: "chat_json", status: error.status },
+    });
     logXavierEvent(error.status >= 500 ? "error" : "warn", "chat.request_failed", {
       request_id: requestId,
       status: error.status,
@@ -816,6 +871,7 @@ async function streamLlmRound(
 
 export async function handleJarvisChatStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const requestId = getXavierRequestId(req);
+  const startedAt = Date.now();
   res.setHeader("X-Request-Id", requestId);
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
@@ -844,6 +900,14 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   try {
     context = await prepareAuthenticatedWebChat(req);
     history = context.persist ? context.history : (Array.isArray(payload.history) ? payload.history : []);
+    recordXavierUsageEventDetached({
+      userId: context.persist ? context.userId : null,
+      requestId,
+      channel: "web",
+      eventName: "chat_request",
+      status: "started",
+      metadata: { route: "chat_stream", engine: String(payload.engine || "auto").slice(0, 32) },
+    });
   } catch (e) {
     const authError = authErrorResponse(e);
     const error = authError
@@ -935,6 +999,17 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
         sseWrite(res, { type: "delta", text: reply });
         sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pdfkit.local"], executor: "claude" });
+        recordXavierUsageEventDetached({
+          userId: context.persist ? context.userId : null,
+          requestId,
+          channel: "web",
+          eventName: "artifact_pdf",
+          status: "success",
+          provider: "local",
+          model: "pdf",
+          latencyMs: Date.now() - startedAt,
+          metadata: { route: "chat_stream", executor: "claude" },
+        });
       } else {
         sseWrite(res, { type: "tool_start", names: ["claude.messages", "claude.web_search"] });
         const result = await generateClaudeReply({
@@ -960,9 +1035,29 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         }
         sseWrite(res, { type: "delta", text: reply });
         sseWrite(res, { type: "done", reply, tools_used: result.tools_used, citations: result.citations, model: result.model, executor: "claude" });
+        recordXavierUsageEventDetached({
+          userId: context.persist ? context.userId : null,
+          requestId,
+          channel: "web",
+          eventName: "chat_response",
+          status: "success",
+          provider: "claude",
+          model: result.model,
+          latencyMs: Date.now() - startedAt,
+          metadata: { route: "chat_stream", executor: "claude", tools: result.tools_used.length },
+        });
       }
     } catch (error) {
       const message = (error as Error).message;
+      recordXavierUsageEventDetached({
+        userId: context.persist ? context.userId : null,
+        requestId,
+        channel: "web",
+        eventName: "chat_error",
+        status: "error",
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_stream", executor: "claude" },
+      });
       logXavierEvent("error", "chat.stream_claude_failed", { request_id: requestId, error: message });
       sseWrite(res, { type: "error", message: publicXavierError(502, message), request_id: requestId });
     } finally {
@@ -1054,6 +1149,17 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     if (!finalContent) {
       sseWrite(res, { type: "error", message: "Empty final reply after tool calls" });
     } else {
+      recordXavierUsageEventDetached({
+        userId: context.persist ? context.userId : null,
+        requestId,
+        channel: "web",
+        eventName: "chat_response",
+        status: "success",
+        provider: "grok",
+        model: "grok-4.3",
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_stream", tools: usedTools.length },
+      });
       if (context.persist) {
         await appendXavierMessage({
           userId: context.userId,
@@ -1069,7 +1175,16 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
       sseWrite(res, { type: "done", reply: finalContent, tools_used: usedTools });
     }
   } catch (e) {
-    sseWrite(res, { type: "error", message: (e as Error).message });
+    recordXavierUsageEventDetached({
+      userId: context.persist ? context.userId : null,
+      requestId,
+      channel: "web",
+      eventName: "chat_error",
+      status: "error",
+      latencyMs: Date.now() - startedAt,
+      metadata: { route: "chat_stream", executor: "grok" },
+    });
+    sseWrite(res, { type: "error", message: publicXavierError(502, (e as Error).message), request_id: requestId });
   } finally {
     cleanup();
     try { res.end(); } catch {}
@@ -1092,6 +1207,7 @@ const DEFAULT_VOICE_ID = "F1W6zKJWyDQD3yKJc4A6";
 
 export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const requestId = getXavierRequestId(req);
+  const startedAt = Date.now();
   res.setHeader("X-Request-Id", requestId);
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
@@ -1115,6 +1231,15 @@ export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse)
     return;
   }
   const voiceId = (payload.voiceId || DEFAULT_VOICE_ID).toString();
+  recordXavierUsageEventDetached({
+    requestId,
+    channel: "web",
+    eventName: "voice_synthesis",
+    status: "started",
+    provider: "elevenlabs",
+    model: "eleven_turbo_v2_5",
+    metadata: { voice: voiceId === DEFAULT_VOICE_ID ? "xavier_default" : "custom", text_length: text.length },
+  });
 
   try {
     // Endpoint /stream da ElevenLabs entrega chunks MP3 conforme são gerados,
@@ -1142,6 +1267,16 @@ export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse)
     if (!upstream.ok || !upstream.body) {
       const errText = upstream.body ? await upstream.text() : "empty response";
       logXavierEvent("error", "tts.provider_failed", { request_id: requestId, status: upstream.status, error: errText });
+      recordXavierUsageEventDetached({
+        requestId,
+        channel: "web",
+        eventName: "voice_synthesis",
+        status: "error",
+        provider: "elevenlabs",
+        model: "eleven_turbo_v2_5",
+        latencyMs: Date.now() - startedAt,
+        metadata: { stage: "provider", provider_status: upstream.status },
+      });
       sendJson(res, 502, { error: publicXavierError(502, errText), request_id: requestId });
       return;
     }
@@ -1166,9 +1301,29 @@ export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse)
       try { reader.releaseLock(); } catch {}
       res.end();
     }
+    recordXavierUsageEventDetached({
+      requestId,
+      channel: "web",
+      eventName: "voice_synthesis",
+      status: "success",
+      provider: "elevenlabs",
+      model: "eleven_turbo_v2_5",
+      latencyMs: Date.now() - startedAt,
+      metadata: { voice: voiceId === DEFAULT_VOICE_ID ? "xavier_default" : "custom", text_length: text.length },
+    });
   } catch (e) {
     const message = (e as Error).message;
     logXavierEvent("error", "tts.failed", { request_id: requestId, error: message });
+    recordXavierUsageEventDetached({
+      requestId,
+      channel: "web",
+      eventName: "voice_synthesis",
+      status: "error",
+      provider: "elevenlabs",
+      model: "eleven_turbo_v2_5",
+      latencyMs: Date.now() - startedAt,
+      metadata: { stage: "handler" },
+    });
     if (!res.headersSent) {
       sendJson(res, 502, { error: publicXavierError(502, message), request_id: requestId });
     } else {
