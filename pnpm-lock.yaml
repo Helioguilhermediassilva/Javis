@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@countrystatecity/countries-browser':
+        specifier: ^1.0.4
+        version: 1.0.4
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.76.0(react@19.2.6))
@@ -334,6 +337,9 @@ packages:
 
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
+
+  '@countrystatecity/countries-browser@1.0.4':
+    resolution: {integrity: sha512-6V/TKWFTK2IJAY4bj1vku92v5mtrCvJXt9cvc1VdRnpSvqmV0zPfb/0YAR+CMU+9hnCzpVr0R/s3Z0UDfYDMXw==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -4239,6 +4245,8 @@ snapshots:
       vite: 7.3.3(@types/node@24.12.4)(jiti@2.7.0)(lightningcss@1.32.0)
 
   '@chevrotain/types@11.1.2': {}
+
+  '@countrystatecity/countries-browser@1.0.4': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
