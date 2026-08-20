@@ -59,9 +59,10 @@ interface FileDropZoneProps {
   currentFile: File | null;
   onClear: () => void;
   compact?: boolean;
+  fill?: boolean;
 }
 
-export default function FileDropZone({ onFileSelected, currentFile, onClear, compact = false }: FileDropZoneProps) {
+export default function FileDropZone({ onFileSelected, currentFile, onClear, compact = false, fill = false }: FileDropZoneProps) {
   const [dragOver, setDragOver] = useState(false);
   const [hovering, setHovering] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -117,8 +118,8 @@ export default function FileDropZone({ onFileSelected, currentFile, onClear, com
 
   return (
     <div
-      className="relative w-full cursor-pointer select-none"
-      style={{ height: compact ? "72px" : "100px" }}
+      className="relative h-full min-h-0 w-full cursor-pointer select-none"
+      style={{ height: fill ? "100%" : compact ? "72px" : "100px" }}
       onDragEnter={handleDragEnter}
       onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
       onDragLeave={handleDragLeave}

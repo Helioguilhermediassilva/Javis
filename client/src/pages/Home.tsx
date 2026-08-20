@@ -585,10 +585,12 @@ export default function Home() {
             gap: "6px",
           }}
         >
-          <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ {t("home.activity")}
-          </div>
-          <LogWidget logs={logs} compact />
+          <section className="flex min-h-[150px] flex-[1.15] flex-col gap-1">
+            <div className="shrink-0 text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
+              ▸ {t("home.activity")}
+            </div>
+            <LogWidget logs={logs} compact fill />
+          </section>
 
           {generatedFiles.length > 0 && (
             <div className="shrink-0" style={{ border: `1px solid ${C.BORDER}`, background: C.PANEL, padding: "6px" }}>
@@ -611,29 +613,33 @@ export default function Home() {
             </div>
           )}
 
-          <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
+          <section className="flex min-h-[150px] flex-[0.85] flex-col gap-1">
+            <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
+            <div className="shrink-0 text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
+              ▸ {t("home.uploadFile")}
+            </div>
+            <div className="min-h-0 flex-1">
+              <FileDropZone
+                onFileSelected={handleFileSelected}
+                currentFile={currentFile}
+                onClear={handleFileClear}
+                compact
+                fill
+              />
+            </div>
+            <div className="shrink-0 text-[7px]" style={{ color: C.TEXT_MED }}>
+              {currentFile
+                ? t("home.fileReady", { file: currentFile.name })
+                : t("home.noFile")}
+            </div>
+          </section>
 
-          <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ {t("home.uploadFile")}
-          </div>
-          <FileDropZone
-            onFileSelected={handleFileSelected}
-            currentFile={currentFile}
-            onClear={handleFileClear}
-            compact
-          />
-          <div className="text-[7px]" style={{ color: C.TEXT_MED }}>
-            {currentFile
-              ? t("home.fileReady", { file: currentFile.name })
-              : t("home.noFile")}
-          </div>
-
-          <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
-
-          <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ {t("home.command")}
-          </div>
-          <div className="relative shrink-0">
+          <section className="flex min-h-[190px] flex-[1.45] flex-col gap-1">
+            <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
+            <div className="shrink-0 text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
+              ▸ {t("home.command")}
+            </div>
+            <div className="relative min-h-0 flex-1">
             <input
               ref={attachmentInputRef}
               type="file"
@@ -744,7 +750,8 @@ export default function Home() {
                 </button>
               </div>
             </div>
-          </div>
+            </div>
+          </section>
         </aside>
       </div>
 

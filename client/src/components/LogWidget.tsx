@@ -30,6 +30,7 @@ function getLogColor(text: string): string {
 interface LogWidgetProps {
   logs: string[];
   compact?: boolean;
+  fill?: boolean;
 }
 
 /**
@@ -42,7 +43,7 @@ interface LogWidgetProps {
  *     non-done entry. When all chars are revealed, mark `done: true`.
  *   - This avoids cross-effect coordination via refs and works under StrictMode.
  */
-export default function LogWidget({ logs, compact = false }: LogWidgetProps) {
+export default function LogWidget({ logs, compact = false, fill = false }: LogWidgetProps) {
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const processedRef = useRef(0);
@@ -88,7 +89,7 @@ export default function LogWidget({ logs, compact = false }: LogWidgetProps) {
   return (
     <div
       ref={scrollRef}
-      className={compact ? "h-[118px] shrink-0 overflow-y-auto overflow-x-hidden" : "flex-1 overflow-y-auto overflow-x-hidden"}
+      className={fill ? "min-h-0 flex-1 overflow-y-auto overflow-x-hidden" : compact ? "h-[118px] shrink-0 overflow-y-auto overflow-x-hidden" : "flex-1 overflow-y-auto overflow-x-hidden"}
       style={{
         background: C.PANEL,
         border: `1px solid ${C.BORDER}`,
@@ -97,7 +98,7 @@ export default function LogWidget({ logs, compact = false }: LogWidgetProps) {
         fontSize: "9px",
         lineHeight: "1.7",
         padding: "6px",
-        minHeight: compact ? "64px" : "100px",
+        minHeight: fill ? "120px" : compact ? "64px" : "100px",
       }}
     >
       {entries.map((e, i) => {
