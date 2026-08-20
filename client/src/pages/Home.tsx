@@ -13,6 +13,7 @@ import { matchWakeWord, WakeWordArmedWindow } from "@/lib/wakeWord";
 import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 const C = {
   BG: "#00060a",
@@ -67,6 +68,8 @@ function useSimulatedMetrics() {
 
 export default function Home() {
   const { user, signOut } = useAuth();
+  const { t, locale } = useLanguage();
+  const browserLocale = locale === "pt" ? "pt-BR" : locale === "es" ? "es-ES" : "en-US";
   const [hudState, setHudState] = useState<HudState>("INITIALISING");
   const [muted, setMuted] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
@@ -87,7 +90,7 @@ export default function Home() {
 
   // TTS: voz original do XAVIER via ElevenLabs, com fallback local silencioso apenas em caso de indisponibilidade temporária.
   const elevenTts = useElevenLabsTTS();
-  const browserTts = useSpeechSynthesis({ lang: "pt-BR", rate: 1.0, pitch: 1.0 });
+  const browserTts = useSpeechSynthesis({ lang: browserLocale, rate: 1.0, pitch: 1.0 });
   const ttsRef = useRef({ elevenTts, browserTts });
   useEffect(() => { ttsRef.current = { elevenTts, browserTts }; }, [elevenTts, browserTts]);
 
@@ -115,7 +118,7 @@ export default function Home() {
     if (processingRef.current) return;
     processingRef.current = true;
     const attachmentsToSend = pendingAttachmentsRef.current;
-    const userLogText = text.trim() || (attachmentsToSend[0]?.name ? `[anexo: ${attachmentsToSend[0]?.name}]` : "[anexo]");
+    const userLogText = text.trim() || (attachmentsToSend[0]?.name ? t("home.attachment", { file: attachmentsToSend[0]?.name }) : t("home.attachmentGeneric"));
     setLogs((l) => [...l, `Você: ${userLogText}`]);
     setHudState("THINKING");
     setPendingAttachments([]);
@@ -143,12 +146,12 @@ export default function Home() {
           });
         },
         onToolStart: (names) => {
-          setLogs((l) => [...l, `SYS: consultando fontes (${names.join(", ")})...`]);
+          setLogs((l) => [...l, t("home.sourceLookup", { sources: names.join(", ") })]);
         },
         onFile: (file) => {
           const attachment: XavierFileAttachment = { file_name: file.file_name, url: file.url, size_bytes: file.size_bytes };
           setGeneratedFiles((files) => [attachment, ...files].filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index).slice(0, 8));
-          setLogs((l) => [...l, `SYS: PDF gerado — ${file.file_name}`]);
+          setLogs((l) => [...l, t("home.pdfGenerated", { file: file.file_name })]);
         },
       });
       const userContentForHistory = attachmentsToSend.length > 0
@@ -174,11 +177,11 @@ export default function Home() {
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setLogs((l) => [...l, `SYS: Erro — ${msg}`]);
+      setLogs((l) => [...l, `${t("home.systemCode")}: ${t("home.error")} — ${msg}`]);
       processingRef.current = false;
       setHudState(mutedRef.current ? "MUTED" : "LISTENING");
     }
-  }, [speakReply]);
+  }, [speakReply, t]);
 
   // STT em pt-BR. Quando o modo wake-word está ativo, filtramos as falas
   // antes de enviar ao LLM.
@@ -205,7 +208,9 @@ export default function Home() {
         // Só "Ei XAVIER" sem comando — acusa presença e abre janela armada.
         wakeArmedRef.current.arm();
         const honorific = prefsRef.current.honorific;
-        const reply = honorific === "senhora" ? "Senhora?" : "Senhor?";
+        const reply = honorific === "senhora"
+          ? (locale === "pt" ? "Senhora?" : locale === "es" ? "¿Señora?" : "Ma'am?")
+          : (locale === "pt" ? "Senhor?" : locale === "es" ? "¿Señor?" : "Sir?");
         setLogs((l) => [...l, `Xavier: ${reply}`]);
         setHudState("SPEAKING");
         speakReply(reply, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
@@ -213,10 +218,10 @@ export default function Home() {
       return;
     }
     processCommand(trimmed);
-  }, [processCommand, speakReply]);
+  }, [locale, processCommand, speakReply]);
 
   const stt = useSpeechRecognition({
-    lang: "pt-BR",
+    lang: browserLocale,
     continuous: true,
     interimResults: true,
     onFinalResult: handleSttFinal,
@@ -228,15 +233,13 @@ export default function Home() {
   useEffect(() => {
     const tick = () => {
       const now = new Date();
-      setClock(now.toLocaleTimeString("pt-BR", { hour12: false }));
-      const days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-      const months = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-      setDate(`${days[now.getDay()]} ${now.getDate().toString().padStart(2, "0")} ${months[now.getMonth()]} ${now.getFullYear()}`);
+      setClock(now.toLocaleTimeString(browserLocale, { hour12: false }));
+      setDate(new Intl.DateTimeFormat(browserLocale, { weekday: "short", day: "2-digit", month: "short", year: "numeric" }).format(now));
     };
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [browserLocale]);
 
   // Start STT when LISTENING; stop otherwise.
   const sttRef = useRef(stt);
@@ -274,14 +277,14 @@ export default function Home() {
     setMuted(next);
     if (next) {
       setHudState("MUTED");
-      setLogs((l) => [...l, "SYS: Microfone silenciado."]);
+      setLogs((l) => [...l, `${t("home.systemCode")}: ${t("home.microphoneOff")}`]);
       ttsRef.current.elevenTts.cancel();
       ttsRef.current.browserTts.cancel();
     } else {
       setHudState("LISTENING");
-      setLogs((l) => [...l, "SYS: Microfone ativo."]);
+      setLogs((l) => [...l, `${t("home.systemCode")}: ${t("home.microphoneOn")}`]);
     }
-  }, []);
+  }, [t]);
 
   const toggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
@@ -297,21 +300,21 @@ export default function Home() {
     prefsRef.current = prefs;
     setShowSetup(false);
     setHudState("LISTENING");
-    setLogs((l) => [...l, "SYS: Sistema inicializado. XAVIER online."]);
+    setLogs((l) => [...l, `${t("home.systemCode")}: ${t("home.setupOnline")}`]);
     if (prefs.activationMode === "wakeword") {
-      setLogs((l) => [...l, "SYS: Modo wake-word ativo — diga 'Ei XAVIER' antes do comando."]);
+      setLogs((l) => [...l, `${t("home.systemCode")}: ${t("home.wakeWord")}`]);
     }
 
     // Saudação falada adaptada ao tratamento escolhido. Esta primeira chamada
     // de áudio acontece DENTRO do gesto de clique, garantindo autoplay.
     const greet =
       prefs.honorific === "senhora"
-        ? "À sua disposição, senhora. Como posso ajudar?"
-        : "À sua disposição, senhor. Como posso ajudar?";
+        ? (locale === "pt" ? "À sua disposição, senhora. Como posso ajudar?" : locale === "es" ? "A su disposición, señora. ¿Cómo puedo ayudarla?" : "At your service, ma'am. How can I help?")
+        : (locale === "pt" ? "À sua disposição, senhor. Como posso ajudar?" : locale === "es" ? "A su disposición, señor. ¿Cómo puedo ayudarle?" : "At your service, sir. How can I help?");
     setLogs((l) => [...l, `Xavier: ${greet}`]);
     setHudState("SPEAKING");
     speakReply(greet, () => setHudState(mutedRef.current ? "MUTED" : "LISTENING"));
-  }, [speakReply]);
+  }, [locale, speakReply, t]);
 
   const handleSend = useCallback(() => {
     const text = inputText.trim();
@@ -325,17 +328,17 @@ export default function Home() {
     const size = file.size < 1024 ? `${file.size} B` :
       file.size < 1024 * 1024 ? `${(file.size / 1024).toFixed(1)} KB` :
       `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-    setLogs((l) => [...l, `ARQ: ${file.name} (${size}) carregado`]);
+    setLogs((l) => [...l, t("home.fileLoaded", { file: file.name, size })]);
     try {
       const att = await fileToAttachment(file);
       setPendingAttachments([att]);
-      setLogs((l) => [...l, `SYS: Pronto — pergunte algo sobre ${file.name} ou pressione \u25b8 para enviar`]);
+      setLogs((l) => [...l, t("home.fileReadyToSend", { file: file.name })]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setLogs((l) => [...l, `SYS: Erro ao ler arquivo — ${msg}`]);
+      setLogs((l) => [...l, t("home.fileReadError", { error: msg })]);
       setCurrentFile(null);
     }
-  }, []);
+  }, [t]);
 
   const handleFileClear = useCallback(() => {
     setCurrentFile(null);
@@ -380,7 +383,7 @@ export default function Home() {
             XAVIER
           </div>
           <div className="text-[7px] tracking-wider" style={{ color: C.PRI_DIM }}>
-            Sistema Inteligente Operacional · NowGo AI
+            {t("home.assistantSubtitle")}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -394,13 +397,13 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-1.5">
             <Link href="/memory" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
-              MEMÓRIA
+              {t("home.memory")}
             </Link>
             <Link href="/telegram-connect" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
-              TELEGRAM
+              {t("home.telegram")}
             </Link>
-            <button type="button" onClick={() => void signOut()} className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_DIM }} title={user?.email || "Encerrar sessão"}>
-              SAIR
+            <button type="button" onClick={() => void signOut()} className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_DIM }} title={user?.email || t("home.closeSession")}>
+              {t("common.logout")}
             </button>
           </div>
         </div>
@@ -423,7 +426,7 @@ export default function Home() {
             className="text-[7px] font-bold pb-1"
             style={{ color: C.PRI, borderBottom: `1px solid ${C.BORDER}` }}
           >
-            ◈ MONITOR DO SISTEMA
+            ◈ {t("home.monitor")}
           </div>
 
           <MetricBar label="CPU" value={metrics.cpu} text={`${metrics.cpu.toFixed(0)}%`} color={C.PRI} />
@@ -437,13 +440,13 @@ export default function Home() {
             style={{ background: C.PANEL2, border: `1px solid ${C.BORDER}`, padding: "5px 6px" }}
           >
             <div className="text-[8px] font-bold leading-relaxed" style={{ color: C.GREEN }}>
-              ATIVO  {uptime}
+              {t("home.active")}  {uptime}
             </div>
             <div className="text-[8px] leading-relaxed" style={{ color: C.TEXT_MED }}>
-              PROC  {procCount}
+              {t("home.process")}  {procCount}
             </div>
             <div className="text-[8px] leading-relaxed" style={{ color: C.ACC2 }}>
-              SO  WEB
+              {t("home.os")}  WEB
             </div>
           </div>
 
@@ -453,13 +456,13 @@ export default function Home() {
             className="text-center text-[7px] font-bold p-1 rounded-sm whitespace-pre-line"
             style={{ color: C.GREEN, background: C.PANEL2, border: `1px solid ${C.BORDER_A}` }}
           >
-            {"NÚCLEO IA\nATIVO"}
+            {t("home.aiCore")}
           </div>
           <div
             className="text-center text-[7px] font-bold p-1 rounded-sm whitespace-pre-line"
             style={{ color: C.PRI, background: C.PANEL2, border: `1px solid ${C.BORDER_A}` }}
           >
-            {"SEG\nLIBERADA"}
+            {t("home.security")}
           </div>
           <div
             className="text-center text-[7px] font-bold p-1 rounded-sm whitespace-pre-line"
@@ -500,13 +503,13 @@ export default function Home() {
           }}
         >
           <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ REGISTRO DE ATIVIDADE
+            ▸ {t("home.activity")}
           </div>
           <LogWidget logs={logs} />
 
           {generatedFiles.length > 0 && (
             <div className="shrink-0" style={{ border: `1px solid ${C.BORDER}`, background: C.PANEL, padding: "6px" }}>
-              <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>▸ ARQUIVOS GERADOS</div>
+                <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>▸ {t("home.generatedFiles")}</div>
               <div className="mt-1 flex flex-col gap-1">
                 {generatedFiles.map((file) => (
                   <a
@@ -516,7 +519,7 @@ export default function Home() {
                     rel="noreferrer"
                     className="truncate text-[8px] underline"
                     style={{ color: C.PRI }}
-                    title={`Baixar ${file.file_name}`}
+                    title={`${t("home.download")} ${file.file_name}`}
                   >
                     {file.file_name}
                   </a>
@@ -528,7 +531,7 @@ export default function Home() {
           <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
 
           <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ ENVIAR ARQUIVO
+            ▸ {t("home.uploadFile")}
           </div>
           <FileDropZone
             onFileSelected={handleFileSelected}
@@ -537,14 +540,14 @@ export default function Home() {
           />
           <div className="text-[7px]" style={{ color: C.TEXT_MED }}>
             {currentFile
-              ? `Diga ao XAVIER o que fazer com ${currentFile.name}`
-              : "Nenhum arquivo carregado — arraste ou clique acima"}
+              ? t("home.fileReady", { file: currentFile.name })
+              : t("home.noFile")}
           </div>
 
           <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
 
           <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
-            ▸ COMANDO
+            ▸ {t("home.command")}
           </div>
           <div className="flex gap-1.5 shrink-0">
             <input
@@ -553,7 +556,7 @@ export default function Home() {
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
-              placeholder="Digite um comando ou pergunta…"
+              placeholder={t("home.commandPlaceholder")}
               className="flex-1 h-[30px] px-2 text-[9px] rounded-sm outline-none transition-colors"
               style={{
                 background: "#000d14",
@@ -586,7 +589,7 @@ export default function Home() {
               border: `1px solid ${muted ? C.MUTED_C : C.GREEN}`,
             }}
           >
-            {muted ? "🔇  MICROFONE SILENCIADO" : "🎙  MICROFONE ATIVO"}
+            {muted ? `🔇  ${t("home.microphoneMuted")}` : `🎙  ${t("home.microphoneActive")}`}
           </button>
 
           <button
@@ -598,7 +601,7 @@ export default function Home() {
               border: `1px solid ${C.BORDER}`,
             }}
           >
-            ⛶  TELA CHEIA  [F11]
+            ⛶  {t("home.fullscreen")}  [F11]
           </button>
         </aside>
       </div>
@@ -613,13 +616,13 @@ export default function Home() {
         }}
       >
         <span className="text-[7px]" style={{ color: C.TEXT_MED }}>
-          [F4] Silenciar  ·  [F11] Tela Cheia
+          {t("home.shortcuts")}
         </span>
         <span className="text-[7px]" style={{ color: C.TEXT_MED }}>
-          NOWGO AI  ·  CONFIDENCIAL
+          NOWGO AI  ·  {t("home.confidential")}
         </span>
         <span className="text-[7px]" style={{ color: C.PRI_DIM }}>
-          POWERED BY NOWGO AI
+          {t("home.poweredBy")}
         </span>
       </footer>
 

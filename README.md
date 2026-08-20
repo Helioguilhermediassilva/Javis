@@ -106,9 +106,9 @@ O Xavier deve pedir esclarecimentos quando houver ambiguidade antes de alterar o
 
 O Xavier pode ser utilizado pelo Telegram para texto, áudio, documentos e comandos de CRM. O processamento é associado ao usuário conectado e mantém o indicador de atividade enquanto o assistente trabalha.
 
-A arquitetura atual suporta conexões individuais. A evolução recomendada é disponibilizar um **bot oficial multiusuário**, com vinculação segura por código temporário ou QR Code. Nesse formato, todos utilizariam a identidade pública do Xavier, enquanto memória, dados e registros continuariam isolados internamente.
+O canal oficial multiusuário utiliza a identidade pública do Xavier e vincula cada chat a uma conta por um código temporário de uso único, apresentado também como QR Code e deep link no cockpit. Memória, arquivos, CRM e limites de uso continuam isolados por `user_id`; o webhook sem `connection_id` atende o bot oficial, enquanto conexões individuais legadas permanecem compatíveis durante a transição.
 
-A migração deve ser gradual, preservando as conexões existentes até que o novo modelo seja validado.
+Para ativar o canal oficial no ambiente de produção, configure `TELEGRAM_BOT_TOKEN` e `TELEGRAM_OFFICIAL_WEBHOOK_SECRET` no projeto autorizado. O serviço aceita temporariamente `TELEGRAM_WEBHOOK_SECRET` como fallback do segundo valor, mas a configuração separada é recomendada. O webhook deve apontar para `https://jarvisnowgo.com/api/telegram/webhook` sem query string de conexão.
 
 ---
 
@@ -134,8 +134,8 @@ O cadastro local permanece como fallback operacional controlado, enquanto o ecos
 | PDF e apresentações | Operacional |
 | CRM invisível | Operacional |
 | Observabilidade econômica | Fundação aplicada |
-| Bot Telegram oficial multiusuário | Próxima evolução |
-| Idiomas PT, EN e ES | Próxima evolução |
+| Bot Telegram oficial multiusuário | Operacional; vínculo por código único e QR Code |
+| Idiomas PT, EN e ES | Operacional no login e cockpit |
 | Fundação de entitlements por plano | Aplicada sem cobrança local |
 | Billing centralizado no NowGo AI | Planejado, fora do Javis nesta etapa |
 | Organizações, equipes e RBAC | Evolução posterior |
@@ -193,7 +193,7 @@ O desenvolvimento do Xavier segue cinco princípios:
 
 ### Próxima etapa
 
-A próxima etapa deve concluir a fundação de self-service sem alterar a identidade visual: internacionalização estrutural, entitlements neutros de provider, bot Telegram multiusuário, onboarding mínimo, testes de isolamento e métricas de ativação.
+A próxima etapa deve validar a ativação self-service em produção sem alterar a identidade visual: onboarding orientado por conta, métricas de ativação, testes de carga do canal oficial e contrato de identidade compartilhada com o ecossistema NowGo AI.
 
 ### Etapa comercial
 

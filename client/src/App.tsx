@@ -5,6 +5,7 @@ import { Route, Switch } from "wouter";
 import type React from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
+import { LanguageProvider, useLanguage } from "./contexts/LanguageContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -14,8 +15,9 @@ import EmailConfirmed from "./pages/EmailConfirmed";
 
 function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   const { loading, user } = useAuth();
+  const { t } = useLanguage();
   if (loading) {
-    return <div className="flex min-h-screen items-center justify-center bg-[#00060a] text-xs tracking-[0.3em] text-[#00d4ff]">XAVIER / VALIDANDO SESSÃO</div>;
+    return <div className="flex min-h-screen items-center justify-center bg-[#00060a] text-xs tracking-[0.3em] text-[#00d4ff]">XAVIER / {t("common.session")}</div>;
   }
   return user ? <>{children}</> : <Login />;
 }
@@ -51,9 +53,11 @@ function App() {
       <ThemeProvider defaultTheme="dark">
         <TooltipProvider>
           <Toaster />
-          <AuthProvider>
-            <Router />
-          </AuthProvider>
+          <LanguageProvider>
+            <AuthProvider>
+              <Router />
+            </AuthProvider>
+          </LanguageProvider>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
