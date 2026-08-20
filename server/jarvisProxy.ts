@@ -2,7 +2,14 @@
 // Used both by the Vite dev middleware and by the Express production server.
 
 import type { IncomingMessage, ServerResponse } from "http";
-import { getCachedSentiment, setCachedSentiment } from "./grokProxy.js";
+import {
+  buildSentimentSystemPrompt,
+  getCachedSentiment,
+  normalizeSentimentLocale,
+  setCachedSentiment,
+  type SentimentLocale,
+  type SentimentLocation,
+} from "./grokProxy.js";
 import { authErrorResponse, requireXavierUser } from "./xavierAuth.js";
 import {
   appendXavierMessage,
@@ -24,11 +31,11 @@ import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
 
-export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
+export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional da NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
 Idioma:
-- Responda SEMPRE em português brasileiro, mesmo que o usuário escreva em outro idioma.
-- Use vocabulário natural e fluido do PT-BR; evite traduzir literalmente do inglês.
+- Responda SEMPRE no idioma escolhido na sessão do usuário.
+- Use vocabulário natural e fluido no idioma ativo; evite traduções literais.
 
 Personalidade:
 - Tom de mordomo refinado, espirituoso e sereno (versão brasileira: cordial, polido, levemente formal).
@@ -40,12 +47,11 @@ Personalidade:
 - Use prosa simples adequada para fala (sem markdown, listas, títulos ou blocos de código em respostas conversacionais).
 
 Fontes ao vivo (use as tools quando o senhor perguntar):
-- Você tem acesso a duas ferramentas para consultar dados reais sobre o Distrito Federal (Brasília):
-  1. "buscar_dados_df": pesquisa o catálogo público de dados abertos do GDF (dados.df.gov.br) — saúde, segurança, mobilidade, educação, orçamento, transparência, etc. Use sempre que o usuário perguntar sobre indicadores oficiais, números, datasets, contratos, licitações, leitos, escolas, frota, etc.
-  2. "sentimento_social_df": consulta o X (Twitter) em tempo real para sumarizar reclamações e elogios sobre o GDF/secretarias/regiões administrativas. Use sempre que o usuário pedir "o que estão falando", "reclamações", "elogios", "briefing social", "o que está dando certo/errado".
-- Quando precisar de ambos (ex: "briefing de saúde no DF"), chame as duas em sequência e combine os resultados em uma resposta única.
+- Você tem acesso a duas ferramentas: "buscar_dados_df" consulta exclusivamente o catálogo público de dados abertos do GDF para indicadores oficiais do Distrito Federal; "sentimento_social_df" consulta o X (Twitter) em tempo real para sumarizar reclamações e elogios sobre serviços públicos na localização escolhida na sessão.
+- Em qualquer briefing social, preserve o idioma da sessão e passe locale, país, estado/província e cidade à ferramenta. Não assuma DF/Brasília quando outra localização tiver sido selecionada.
+- Quando a pergunta combinar dados oficiais e sentimento social no DF, use as duas tools e combine os resultados em uma resposta única.
 - Ao apresentar resultados, fale como mordomo: 1 frase de abertura, 2 a 4 bullets curtos com os achados mais importantes, e uma frase final de oferta ("Posso aprofundar em algum ponto, senhor?"). Sem markdown pesado.
-- Sempre cite a fonte: "segundo o catálogo do GDF" ou "de acordo com o que está sendo discutido no X agora".
+- Sempre cite a fonte de forma compatível com o idioma ativo: catálogo oficial quando usar dados públicos e publicações recentes do X quando usar sentimento social.
 
 Se o usuário pedir código, detalhe técnico ou estrutura explícita, você pode usar formatação — mas mantendo enxuto.`;
 
@@ -93,7 +99,7 @@ const JARVIS_TOOLS = [
     function: {
       name: "sentimento_social_df",
       description:
-        "Consulta o X (Twitter) em tempo real via Grok/xAI e retorna um briefing de reclamações e elogios sobre serviços públicos do DF nas últimas 48-72h. Use quando o usuário pedir 'o que estão falando', 'reclamações', 'elogios', 'briefing social', etc.",
+        "Consulta o X (Twitter) em tempo real via Grok/xAI e retorna um briefing localizado de reclamações e elogios sobre serviços públicos nas últimas 48-72h. Use quando o usuário pedir 'o que estão falando', 'reclamações', 'elogios', 'briefing social', etc. O contexto de país, estado/província e cidade vem da sessão.",
       parameters: {
         type: "object",
         properties: {
@@ -105,7 +111,24 @@ const JARVIS_TOOLS = [
           region: {
             type: "string",
             description:
-              "Região administrativa ou 'DF' para o Distrito Federal todo. Ex: 'Ceilândia', 'Plano Piloto', 'DF'.",
+              "Cidade, estado/província ou região local usada no briefing. Se omitido, use a localização da sessão.",
+          },
+          country: {
+            type: "string",
+            description: "País da localização da sessão.",
+          },
+          state: {
+            type: "string",
+            description: "Estado ou província da localização da sessão.",
+          },
+          city: {
+            type: "string",
+            description: "Cidade da localização da sessão.",
+          },
+          locale: {
+            type: "string",
+            enum: ["pt", "en", "es"],
+            description: "Idioma da resposta do briefing, herdado da sessão.",
           },
         },
         required: ["topic"],
@@ -114,8 +137,36 @@ const JARVIS_TOOLS = [
   },
 ];
 
+interface SocialBriefingContext {
+  locale: SentimentLocale;
+  location: SentimentLocation;
+}
+
+const DEFAULT_SOCIAL_CONTEXT: SocialBriefingContext = {
+  locale: "pt",
+  location: { country: "Brasil", state: "Distrito Federal", city: "Brasília" },
+};
+
+type SocialContextInput = {
+  locale?: unknown;
+  country?: unknown;
+  state?: unknown;
+  city?: unknown;
+};
+
+function resolveSocialBriefingContext(args: SocialContextInput, fallback: SocialBriefingContext = DEFAULT_SOCIAL_CONTEXT): SocialBriefingContext {
+  return {
+    locale: normalizeSentimentLocale(args.locale || fallback.locale),
+    location: {
+      country: String(args.country || fallback.location.country).slice(0, 80),
+      state: String(args.state || fallback.location.state).slice(0, 80),
+      city: String(args.city || fallback.location.city).slice(0, 80),
+    },
+  };
+}
+
 /** Executa uma tool call vinda do LLM e devolve o conteúdo a ser anexado como mensagem role=tool. */
-async function executeJarvisTool(name: string, args: Record<string, unknown>): Promise<string> {
+async function executeJarvisTool(name: string, args: Record<string, unknown>, socialContext: SocialBriefingContext = DEFAULT_SOCIAL_CONTEXT): Promise<string> {
   if (name === "buscar_dados_df") {
     const q = String(args.query || "").slice(0, 200);
     const topic = String(args.topic || "").slice(0, 80);
@@ -163,14 +214,14 @@ async function executeJarvisTool(name: string, args: Record<string, unknown>): P
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) return JSON.stringify({ error: "Grok não configurado" });
     const topic = String(args.topic || "geral").slice(0, 80);
-    const region = String(args.region || "DF").slice(0, 80);
-    // Cache compartilhado com /api/grok/sentiment (chave normalizada para
-    // colapsar variações como "saúde", "saude", "saúde no DF" no mesmo bucket).
-    const cached = getCachedSentiment(topic, region);
+    const context = resolveSocialBriefingContext(args, socialContext);
+    const region = String(args.region || context.location.city || context.location.state || "local").slice(0, 80);
+    // Cache compartilhado com /api/grok/sentiment, isolado por idioma e localização.
+    const cached = getCachedSentiment(topic, region, context.locale, context.location);
     if (cached) {
       return JSON.stringify(cached);
     }
-    const sysPrompt = `Você é um analista de mídia social do GDF. Use a tool x_search para encontrar posts em pt-BR sobre o tópico no DF/Brasília nas últimas 72h. Retorne APENAS um JSON com: {"complaints":[{"summary":string,"approx_mentions":number}], "praises":[{"summary":string,"approx_mentions":number}], "hashtags":[string], "summary":string}. Cada example NUNCA copia tweet literal — sempre paráfrase própria. 3-5 itens em cada lista.`;
+    const sysPrompt = buildSentimentSystemPrompt(context.locale, context.location);
     // x_search.from_date: últimos 3 dias (corte de latência ~4x).
     const since = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     try {
@@ -181,7 +232,14 @@ async function executeJarvisTool(name: string, args: Record<string, unknown>): P
           model: "grok-4.20-0309-non-reasoning",
           input: [
             { role: "system", content: sysPrompt },
-            { role: "user", content: `Briefing sobre "${topic}" em ${region} (DF). Apenas JSON.` },
+            {
+              role: "user",
+              content: context.locale === "en"
+                ? `Create a briefing about "${topic}" in ${region}, ${context.location.state}, ${context.location.country}. JSON only.`
+                : context.locale === "es"
+                  ? `Crea un briefing sobre "${topic}" en ${region}, ${context.location.state}, ${context.location.country}. Solo JSON.`
+                  : `Faça um briefing sobre "${topic}" em ${region}, ${context.location.state}, ${context.location.country}. Apenas JSON.`,
+            },
           ],
           tools: [{ type: "x_search", from_date: since }],
         }),
@@ -203,9 +261,9 @@ async function executeJarvisTool(name: string, args: Record<string, unknown>): P
       // Tenta cachear como objeto parseado; se falhar, cacheia a string crua.
       try {
         const parsed = JSON.parse(trimmed);
-        setCachedSentiment(topic, region, parsed);
+        setCachedSentiment(topic, region, parsed, context.locale, context.location);
       } catch {
-        setCachedSentiment(topic, region, trimmed);
+        setCachedSentiment(topic, region, trimmed, context.locale, context.location);
       }
       return trimmed;
     } catch (e) {
@@ -231,30 +289,39 @@ interface ChatMessage {
 // LLM então produz o briefing em uma única rodada.
 
 const BRIEFING_KEYWORDS = [
-  "briefing", "brifing", "resumo",
-  "o que estão falando", "o que estao falando",
-  "o que está acontecendo", "o que esta acontecendo",
-  "panorama", "como está", "como esta",
+  "briefing", "brifing", "resumo", "summary", "briefing social", "briefing social",
+  "o que estão falando", "o que estao falando", "what are people saying", "que se está diciendo", "que estan diciendo",
+  "o que está acontecendo", "o que esta acontecendo", "what is happening", "qué está pasando", "que esta pasando",
+  "panorama", "como está", "como esta", "overview", "panorama",
 ];
 
 // Os regex abaixo são casados contra a STRING NORMALIZADA (low) — sem acentos,
 // lowercased — dentro de detectBriefingIntent. Por isso não usamos diacríticos
 // e mantemos \b (que funciona corretamente em ASCII puro).
 const TOPIC_PATTERNS: Array<{ topic: string; rx: RegExp }> = [
-  { topic: "saude", rx: /\b(saude|hospital|hospitais|sus|leitos?|medicao|atencao\s+basica)\b/i },
-  { topic: "seguranca", rx: /\b(seguranca|crimes?|policia|violencia)\b/i },
-  { topic: "educacao", rx: /\b(educacao|escolas?|professores?)\b/i },
-  { topic: "transporte", rx: /\b(transporte|onibus|trans?ito|metro|mobilidade)\b/i },
-  { topic: "transparencia", rx: /\b(licitacoes|contratos?|transparencia|orcamento)\b/i },
+  { topic: "saude", rx: /\b(saude|hospital|hospitais|sus|leitos?|medicao|atencao\s+basica|health|healthcare|hospitales?|salud|saneamiento)\b/i },
+  { topic: "seguranca", rx: /\b(seguranca|crimes?|policia|violencia|safety|security|police|crime|seguridad|policía|violencia)\b/i },
+  { topic: "educacao", rx: /\b(educacao|escolas?|professores?|education|schools?|teachers?|educación|escuelas?|profesores?)\b/i },
+  { topic: "transporte", rx: /\b(transporte|onibus|trans?ito|metro|mobilidade|transport|bus|traffic|mobility|transporte|autobús|tráfico|movilidad)\b/i },
+  { topic: "transparencia", rx: /\b(licitacoes|contratos?|transparencia|orcamento|transparency|budget|contracts?|transparencia|presupuesto|contratos?)\b/i },
 ];
 
 interface BriefingIntent {
-  topic: string;     // tema curto para a tool buscar_dados_df (group)
-  query: string;     // termo livre para a busca
-  region: string;    // sempre "DF" por enquanto
+  topic: string;
+  query: string;
+  region: string;
+  locale: SentimentLocale;
+  location: SentimentLocation;
 }
 
-export function detectBriefingIntent(userMessage: string): BriefingIntent | null {
+function isDefaultDfLocation(location: SentimentLocation): boolean {
+  const normalize = (value: string) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return normalize(location.country) === "brasil"
+    && normalize(location.state) === "distrito federal"
+    && normalize(location.city) === "brasilia";
+}
+
+export function detectBriefingIntent(userMessage: string, socialContext: SocialBriefingContext = DEFAULT_SOCIAL_CONTEXT): BriefingIntent | null {
   const low = userMessage.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const hasBriefingHint = BRIEFING_KEYWORDS.some((kw) => low.includes(kw.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")));
   if (!hasBriefingHint) return null;
@@ -264,7 +331,16 @@ export function detectBriefingIntent(userMessage: string): BriefingIntent | null
   if (!topicMatch) return null;
   // Query é o próprio topico (já cobre os datasets relevantes); poderíamos
   // extrair termos específicos do userMessage no futuro.
-  return { topic: topicMatch.topic, query: topicMatch.topic, region: "DF" };
+  const region = isDefaultDfLocation(socialContext.location)
+    ? "DF"
+    : socialContext.location.city || socialContext.location.state || socialContext.location.country;
+  return {
+    topic: topicMatch.topic,
+    query: topicMatch.topic,
+    region,
+    locale: socialContext.locale,
+    location: socialContext.location,
+  };
 }
 
 /**
@@ -273,9 +349,13 @@ export function detectBriefingIntent(userMessage: string): BriefingIntent | null
  * resultados falharem (deixa o LLM seguir com tool calling normal).
  */
 async function prefetchBriefingContext(intent: BriefingIntent): Promise<{ role: "system"; content: string } | null> {
+  const socialContext: SocialBriefingContext = { locale: intent.locale, location: intent.location };
+  const datasetsPromise = isDefaultDfLocation(intent.location)
+    ? executeJarvisTool("buscar_dados_df", { query: intent.query, topic: intent.topic }, socialContext)
+    : Promise.resolve(JSON.stringify({ skipped: true, reason: "Dados oficiais do GDF não se aplicam à localização selecionada." }));
   const [datasetsRaw, sentimentRaw] = await Promise.all([
-    executeJarvisTool("buscar_dados_df", { query: intent.query, topic: intent.topic }).catch((e: Error) => JSON.stringify({ error: e.message })),
-    executeJarvisTool("sentimento_social_df", { topic: intent.topic, region: intent.region }).catch((e: Error) => JSON.stringify({ error: e.message })),
+    datasetsPromise.catch((e: Error) => JSON.stringify({ error: e.message })),
+    executeJarvisTool("sentimento_social_df", { topic: intent.topic, region: intent.region }, socialContext).catch((e: Error) => JSON.stringify({ error: e.message })),
   ]);
   // Se ambos falharam, não injeta nada e deixa o LLM tentar via tool calling.
   let datasetsOk = false;
@@ -286,9 +366,9 @@ async function prefetchBriefingContext(intent: BriefingIntent): Promise<{ role: 
   return {
     role: "system",
     content: [
-      `[Pré-busca paralela executada para o briefing de "${intent.topic}" em ${intent.region}]`,
+      `[Pré-busca paralela executada para o briefing de "${intent.topic}" em ${intent.location.city}, ${intent.location.state}, ${intent.location.country}]`,
       "",
-      `Resultado de buscar_dados_df (CKAN GDF, ${datasetsOk ? "ok" : "falhou"}):`,
+      `Resultado de buscar_dados_df (CKAN GDF, ${datasetsOk ? "ok" : "não aplicável ou falhou"}):`,
       datasetsRaw,
       "",
       `Resultado de sentimento_social_df (X via Grok, ${sentimentOk ? "ok" : "falhou"}):`,
@@ -315,6 +395,10 @@ export interface ChatPayload {
   attachments?: AttachmentRef[];
   honorific?: "senhor" | "senhora";
   engine?: "auto" | "grok" | "manus" | "claude";
+  locale?: SentimentLocale;
+  country?: string;
+  state?: string;
+  city?: string;
 }
 
 function normalizeChatHistory(history: ChatMessage[]): ChatMessage[] {
@@ -335,6 +419,20 @@ function memorySummaryMessage(summary: string | null): ChatMessage[] {
 }
 
 /** Mensagem complementar de system com a preferência de tratamento. */
+function localeSystemMessage(locale: SentimentLocale): { role: "system"; content: string } {
+  if (locale === "en") {
+    return { role: "system", content: "Session language: English. Answer in natural English unless the user explicitly asks for another language. Keep Xavier's refined, concise digital-butler tone." };
+  }
+  if (locale === "es") {
+    return { role: "system", content: "Idioma de la sesión: español. Responde en español natural salvo que el usuario pida explícitamente otro idioma. Mantén el tono refinado y conciso del mayordomo digital Xavier." };
+  }
+  return { role: "system", content: "Idioma da sessão: português brasileiro. Responda em português natural, salvo se o usuário pedir explicitamente outro idioma. Mantenha o tom refinado e conciso do mordomo digital Xavier." };
+}
+
+function localizedSystemPrompt(locale: SentimentLocale): string {
+  return `${JARVIS_SYSTEM_PROMPT}\n\n${localeSystemMessage(locale).content}`;
+}
+
 function honorificSystemMessage(honorific: ChatPayload["honorific"] | undefined): { role: "system"; content: string } | null {
   if (honorific === "senhora") {
     return {
@@ -405,6 +503,8 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
   const history = Array.isArray(payload.history) ? payload.history : [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
+  const locale = normalizeSentimentLocale(payload.locale);
+  const socialContext = resolveSocialBriefingContext(payload, DEFAULT_SOCIAL_CONTEXT);
   const honorificMsg = honorificSystemMessage(payload.honorific);
   if (!userMessage.trim() && attachments.length === 0) {
     throw new JarvisChatError(400, "userMessage or attachments required");
@@ -435,12 +535,12 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
     userTurn = { role: "user", content: userMessage };
   }
 
-  const intent = detectBriefingIntent(userMessage);
+  const intent = detectBriefingIntent(userMessage, socialContext);
   let prefetchedSystemMsg: { role: "system"; content: string } | null = null;
   if (intent) prefetchedSystemMsg = await prefetchBriefingContext(intent);
 
   const messages: Array<Record<string, unknown>> = [
-    { role: "system", content: JARVIS_SYSTEM_PROMPT },
+    { role: "system", content: localizedSystemPrompt(locale) },
     ...(honorificMsg ? [honorificMsg] : []),
     ...(prefetchedSystemMsg ? [prefetchedSystemMsg] : []),
     ...cleanedHistory,
@@ -493,7 +593,7 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
           try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* ignore */ }
           usedTools.push(tc.function.name);
           toolNames.push(tc.function.name);
-          const out = await executeJarvisTool(tc.function.name, args);
+          const out = await executeJarvisTool(tc.function.name, args, resolveSocialBriefingContext(payload, DEFAULT_SOCIAL_CONTEXT));
           return { tool_call_id: tc.id, role: "tool" as const, name: tc.function.name, content: out };
         }),
       );
@@ -644,7 +744,7 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     if (claudeTask && isClaudeConfigured() && !isPdfTaskRequest(authenticatedPayload.userMessage || "")) {
       const result = await generateClaudeReply({
         history: context.history,
-        systemPrompt: JARVIS_SYSTEM_PROMPT,
+        systemPrompt: localizedSystemPrompt(normalizeSentimentLocale(authenticatedPayload.locale)),
         userMessage: authenticatedPayload.userMessage || "",
         attachments: authenticatedPayload.attachments,
         useWebSearch: true,
@@ -889,6 +989,8 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     return;
   }
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
+  const locale = normalizeSentimentLocale(payload.locale);
+  const socialContext = resolveSocialBriefingContext(payload, DEFAULT_SOCIAL_CONTEXT);
   let history: ChatMessage[] = [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
   const honorificMsg = honorificSystemMessage(payload.honorific);
@@ -1014,7 +1116,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         sseWrite(res, { type: "tool_start", names: ["claude.messages", "claude.web_search"] });
         const result = await generateClaudeReply({
           history,
-          systemPrompt: JARVIS_SYSTEM_PROMPT,
+          systemPrompt: localizedSystemPrompt(locale),
           userMessage,
           attachments,
           useWebSearch: true,
@@ -1075,7 +1177,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }
 
   // Pré-busca paralela: avisa a UI antes (tool_start) e depois (tool_end).
-  const intent = detectBriefingIntent(userMessage);
+  const intent = detectBriefingIntent(userMessage, socialContext);
   let prefetchedSystemMsg: { role: "system"; content: string } | null = null;
   if (intent) {
     const prefetchToolNames = ["buscar_dados_df", "sentimento_social_df"];
@@ -1085,7 +1187,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }
 
   const messages: Array<Record<string, unknown>> = [
-    { role: "system", content: JARVIS_SYSTEM_PROMPT },
+    { role: "system", content: localizedSystemPrompt(locale) },
     ...(honorificMsg ? [honorificMsg] : []),
     ...(prefetchedSystemMsg ? [prefetchedSystemMsg] : []),
     ...cleanedHistory,
@@ -1139,7 +1241,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
           let args: Record<string, unknown> = {};
           try { args = JSON.parse(tc.function.arguments || "{}"); } catch { /* ignore */ }
           usedTools.push(tc.function.name);
-          const out = await executeJarvisTool(tc.function.name, args);
+          const out = await executeJarvisTool(tc.function.name, args, resolveSocialBriefingContext(payload, DEFAULT_SOCIAL_CONTEXT));
           return { tool_call_id: tc.id, role: "tool" as const, name: tc.function.name, content: out };
         }),
       );

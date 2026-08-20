@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { useLanguage } from "@/contexts/LanguageContext";
+
 const C = {
   BG: "#00060a",
   BORDER_B: "#1a5c7a",
@@ -56,6 +58,7 @@ interface SetupOverlayProps {
 }
 
 export default function SetupOverlay({ onDone }: SetupOverlayProps) {
+  const { t } = useLanguage();
   const [prefs, setPrefs] = useState<JarvisPrefs>(() => DEFAULT_PREFS);
 
   // Carrega preferências persistidas (se houver) na primeira renderização.
@@ -112,29 +115,29 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
         {/* Título */}
         <div className="text-center mb-6">
           <h2 className="text-lg font-bold" style={{ color: C.PRI }}>
-            XAVIER — INICIALIZAÇÃO
+            {t("setup.title")}
           </h2>
           <p className="text-[8px] mt-1" style={{ color: C.TEXT_DIM }}>
-            Configure sua interface antes de ativar o XAVIER
+            {t("setup.subtitle")}
           </p>
         </div>
 
         {/* Preferências de hardware */}
         <div className="mb-5">
           <label className="block text-[8px] font-bold mb-2" style={{ color: C.TEXT_MED }}>
-            ENTRADA / SAÍDA
+            {t("setup.io")}
           </label>
           <div className="flex flex-col gap-2">
             <Toggle
-              label="VOZ DO XAVIER (alto-falantes)"
+              label={t("setup.voice")}
               value={prefs.voiceEnabled}
-              valueLabel={["ATIVADA", "DESATIVADA"]}
+              valueLabel={[t("setup.enabled"), t("setup.disabled")]}
               onClick={() => setPrefs((p) => ({ ...p, voiceEnabled: !p.voiceEnabled }))}
             />
             <Toggle
-              label="MICROFONE (reconhecimento de voz)"
+              label={t("setup.microphone")}
               value={prefs.micEnabled}
-              valueLabel={["ATIVADO", "DESATIVADO"]}
+              valueLabel={[t("setup.enabledMasculine"), t("setup.disabledMasculine")]}
               onClick={() => setPrefs((p) => ({ ...p, micEnabled: !p.micEnabled }))}
             />
           </div>
@@ -143,35 +146,35 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
         {/* Tratamento (gênero) */}
         <div className="mb-5">
           <label className="block text-[8px] font-bold mb-2" style={{ color: C.TEXT_MED }}>
-            COMO O XAVIER DEVE TRATAR VOCÊ?
+            {t("setup.honorific")}
           </label>
           <div className="flex gap-2">
-            <Pill active={prefs.honorific === "senhor"} label="SENHOR" onClick={() => setPrefs((p) => ({ ...p, honorific: "senhor" }))} />
-            <Pill active={prefs.honorific === "senhora"} label="SENHORA" onClick={() => setPrefs((p) => ({ ...p, honorific: "senhora" }))} />
+            <Pill active={prefs.honorific === "senhor"} label={t("setup.sir")} onClick={() => setPrefs((p) => ({ ...p, honorific: "senhor" }))} />
+            <Pill active={prefs.honorific === "senhora"} label={t("setup.madam")} onClick={() => setPrefs((p) => ({ ...p, honorific: "senhora" }))} />
           </div>
           <p className="text-[7px] mt-2 leading-relaxed" style={{ color: C.TEXT_DIM }}>
-            O XAVIER aplicará o tratamento escolhido em todas as respostas e na concordância.
+            {t("setup.honorificNote")}
           </p>
         </div>
 
         {/* Modo de ativação por voz */}
         <div className="mb-5">
           <label className="block text-[8px] font-bold mb-2" style={{ color: C.TEXT_MED }}>
-            ATIVAÇÃO POR VOZ
+            {t("setup.activation")}
           </label>
           <div className="flex gap-2">
-            <Pill active={prefs.activationMode === "continuous"} label="CONTÍNUA" onClick={() => setPrefs((p) => ({ ...p, activationMode: "continuous" }))} />
-            <Pill active={prefs.activationMode === "wakeword"} label="WAKE-WORD: 'EI XAVIER'" onClick={() => setPrefs((p) => ({ ...p, activationMode: "wakeword" }))} />
+            <Pill active={prefs.activationMode === "continuous"} label={t("setup.continuous")} onClick={() => setPrefs((p) => ({ ...p, activationMode: "continuous" }))} />
+            <Pill active={prefs.activationMode === "wakeword"} label={t("setup.wakeword")} onClick={() => setPrefs((p) => ({ ...p, activationMode: "wakeword" }))} />
           </div>
           <p className="text-[7px] mt-2 leading-relaxed" style={{ color: C.TEXT_DIM }}>
             {prefs.activationMode === "wakeword"
-              ? "O XAVIER só processará comandos que comecem com 'XAVIER' ou 'Ei XAVIER'. Útil em ambientes com conversa de fundo (gabinete, reuniões)."
-              : "Tudo que o microfone captar vai ser enviado ao XAVIER. Recomendado em ambiente silencioso."}
+              ? t("setup.wakewordNote")
+              : t("setup.continuousNote")}
           </p>
         </div>
 
         <p className="text-[7px] mb-4 leading-relaxed" style={{ color: C.TEXT_DIM }}>
-          Idioma fixado em Português (Brasil). Ao ativar, o navegador poderá pedir permissão para o microfone.
+          {t("setup.browserNote")}
         </p>
 
         {/* Activate */}
@@ -184,7 +187,7 @@ export default function SetupOverlay({ onDone }: SetupOverlayProps) {
             border: `1px solid ${C.GREEN}`,
           }}
         >
-          ▸ ATIVAR XAVIER
+          ▸ {t("setup.activate")}
         </button>
       </div>
     </div>

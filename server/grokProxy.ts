@@ -35,37 +35,67 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
-const SENTIMENT_SYSTEM_PROMPT = `Você é um analista de mídias sociais especializado em monitoramento do governo do Distrito Federal (Brasília, Brasil).
+export type SentimentLocale = "pt" | "en" | "es";
 
-Você tem busca em tempo real no X (Twitter) habilitada. Use-a para encontrar postagens RECENTES (últimas 48-72h, em português) sobre o tópico solicitado. Foque em menções a:
-- Distrito Federal, GDF, Brasília, secretarias do DF (SES-DF, SSP-DF, DETRAN-DF, SEMOB, SEE-DF, etc.)
-- Regiões administrativas (Plano Piloto, Ceilândia, Taguatinga, Samambaia, Gama, Sobradinho, Águas Claras, etc.)
-- Serviços públicos, hospitais, UPAs, transporte público, segurança, educação no DF
+export interface SentimentLocation {
+  country: string;
+  state: string;
+  city: string;
+}
 
-Sua resposta DEVE ser um JSON válido seguindo EXATAMENTE este schema (e SOMENTE este JSON, sem texto adicional):
+const DEFAULT_SENTIMENT_LOCATION: SentimentLocation = {
+  country: "Brasil",
+  state: "Distrito Federal",
+  city: "Brasília",
+};
+
+export function normalizeSentimentLocale(value: unknown): SentimentLocale {
+  return value === "en" || value === "es" ? value : "pt";
+}
+
+function locationLabel(location: SentimentLocation): string {
+  return [location.city, location.state, location.country].filter(Boolean).join(", ");
+}
+
+export function buildSentimentSystemPrompt(locale: SentimentLocale, location: SentimentLocation): string {
+  const language = locale === "en" ? "English" : locale === "es" ? "Spanish" : "Brazilian Portuguese";
+  const locationText = locationLabel(location);
+  const focus = locale === "en"
+    ? `Focus on public services, institutions, local government, hospitals, transit, safety, education and citizen experience in ${locationText}.`
+    : locale === "es"
+      ? `Concéntrate en servicios públicos, instituciones, gobierno local, hospitales, transporte, seguridad, educación y experiencia ciudadana en ${locationText}.`
+      : `Concentre-se em serviços públicos, instituições, governo local, hospitais, transporte, segurança, educação e experiência dos cidadãos em ${locationText}.`;
+  const rules = locale === "en"
+    ? `Return 3 to 5 items in "complaints" and "praises"; use an empty array when there is no clear signal. Each example_quote must be a short paraphrase (max 140 characters), never a literal post. approx_mentions is a qualitative estimate. Write "summary" in ${language}, with 2-3 sentences and a refined digital-butler tone.`
+    : locale === "es"
+      ? `Devuelve de 3 a 5 elementos en "complaints" y "praises"; usa un array vacío cuando no haya una señal clara. Cada example_quote debe ser una paráfrasis breve (máx. 140 caracteres), nunca una publicación literal. approx_mentions es una estimación cualitativa. Escribe "summary" en ${language}, con 2-3 frases y tono de mayordomo digital refinado.`
+      : `Retorne de 3 a 5 itens em "complaints" e "praises"; use array vazio quando não houver sinal claro. Cada example_quote deve ser uma paráfrase curta (máx. 140 caracteres), nunca uma postagem literal. approx_mentions é uma estimativa qualitativa. Escreva "summary" em ${language}, com 2-3 frases e tom de mordomo digital refinado.`;
+  return `${locale === "en" ? "You are a social media analyst monitoring public services and local government." : locale === "es" ? "Eres un analista de redes sociales que monitorea servicios públicos y gobierno local." : "Você é um analista de mídias sociais que monitora serviços públicos e governo local."}
+
+Use the real-time X (Twitter) search tool to find RECENT posts from the last 48-72 hours about the requested topic and location. Search in the user's language where possible. ${focus}
+
+Your response MUST be valid JSON following EXACTLY this schema, and ONLY this JSON:
 {
   "topic": string,
   "window": string,
-  "complaints": [
-    { "summary": string, "category": string, "approx_mentions": number, "example_quote": string }
-  ],
-  "praises": [
-    { "summary": string, "category": string, "approx_mentions": number, "example_quote": string }
-  ],
+  "complaints": [{ "summary": string, "category": string, "approx_mentions": number, "example_quote": string }],
+  "praises": [{ "summary": string, "category": string, "approx_mentions": number, "example_quote": string }],
   "hashtags": [string],
-  "summary_pt_br": string
+  "summary": string
 }
 
-Regras estritas:
-- Retorne 3 a 5 itens em "complaints" e em "praises". Se não houver elogios claros, devolva array vazio em "praises".
-- Cada "example_quote" deve ser uma PARÁFRASE curta em português (máx. 140 caracteres) — NUNCA copie texto literal de tweets.
-- "approx_mentions" é uma estimativa qualitativa baseada no volume observado.
-- "summary_pt_br" começa com "Senhor," e tem 2-3 frases, tom de mordomo digital JARVIS.
-- "hashtags" lista hashtags relevantes encontradas (com #).`;
+${rules}
+- "hashtags" must contain relevant hashtags found, each beginning with #.
+- Do not invent posts, locations, institutions or numbers. If evidence is weak, say so in the JSON. Return no markdown or text outside the JSON.`;
+}
 
 interface SentimentRequest {
   topic?: string;
   region?: string;
+  locale?: SentimentLocale;
+  country?: string;
+  state?: string;
+  city?: string;
   noCache?: boolean;
 }
 
@@ -91,21 +121,24 @@ function normalizeCacheTerm(s: string): string {
     .join(" ");
 }
 
-function cacheKey(topic: string, region: string): string {
+function cacheKey(topic: string, region: string, locale: SentimentLocale = "pt", location: Partial<SentimentLocation> = {}): string {
   const t = normalizeCacheTerm(topic) || "geral";
-  const r = normalizeCacheTerm(region) || "df";
-  return `${r}::${t}`;
+  const r = normalizeCacheTerm(region) || "local";
+  const c = normalizeCacheTerm(location.country || "") || "country";
+  const s = normalizeCacheTerm(location.state || "") || "state";
+  const city = normalizeCacheTerm(location.city || "") || "city";
+  return `${locale}::${c}::${s}::${city}::${r}::${t}`;
 }
 
-export function getCachedSentiment(topic: string, region: string): unknown | null {
-  return getCached(topic, region);
+export function getCachedSentiment(topic: string, region: string, locale: SentimentLocale = "pt", location: Partial<SentimentLocation> = {}): unknown | null {
+  return getCached(topic, region, locale, location);
 }
-export function setCachedSentiment(topic: string, region: string, value: unknown): void {
-  setCached(topic, region, value);
+export function setCachedSentiment(topic: string, region: string, value: unknown, locale: SentimentLocale = "pt", location: Partial<SentimentLocation> = {}): void {
+  setCached(topic, region, locale, location, value);
 }
 
-function getCached(topic: string, region: string): unknown | null {
-  const key = cacheKey(topic, region);
+function getCached(topic: string, region: string, locale: SentimentLocale = "pt", location: Partial<SentimentLocation> = {}): unknown | null {
+  const key = cacheKey(topic, region, locale, location);
   const entry = sentimentCache.get(key);
   if (!entry) return null;
   if (Date.now() > entry.expiresAt) {
@@ -115,8 +148,8 @@ function getCached(topic: string, region: string): unknown | null {
   return entry.value;
 }
 
-function setCached(topic: string, region: string, value: unknown): void {
-  const key = cacheKey(topic, region);
+function setCached(topic: string, region: string, locale: SentimentLocale, location: Partial<SentimentLocation>, value: unknown): void {
+  const key = cacheKey(topic, region, locale, location);
   sentimentCache.set(key, { value, expiresAt: Date.now() + SENTIMENT_TTL_MS });
   // Pequeno cap para evitar cresc. ilimitado se alguém flooda topics
   if (sentimentCache.size > 100) {
@@ -209,11 +242,17 @@ export async function handleGrokSentiment(req: IncomingMessage, res: ServerRespo
   }
 
   const topic = (payload.topic || "geral").toString().slice(0, 80);
-  const region = (payload.region || "DF").toString().slice(0, 80);
+  const region = (payload.region || payload.city || payload.state || "local").toString().slice(0, 80);
+  const locale = normalizeSentimentLocale(payload.locale);
+  const location: SentimentLocation = {
+    country: (payload.country || DEFAULT_SENTIMENT_LOCATION.country).toString().slice(0, 80),
+    state: (payload.state || DEFAULT_SENTIMENT_LOCATION.state).toString().slice(0, 80),
+    city: (payload.city || DEFAULT_SENTIMENT_LOCATION.city).toString().slice(0, 80),
+  };
 
   // Cache hit → retorna imediato (latência <10ms vs ~7-10s do Grok)
   if (!payload.noCache) {
-    const cached = getCached(topic, region);
+    const cached = getCached(topic, region, locale, location);
     if (cached) {
       res.setHeader("X-Cache", "HIT");
       sendJson(res, 200, cached);
@@ -221,7 +260,12 @@ export async function handleGrokSentiment(req: IncomingMessage, res: ServerRespo
     }
   }
 
-  const userPrompt = `Faça um briefing de sentimento social sobre "${topic}" em ${region} (Distrito Federal, Brasil) usando posts recentes do X. Retorne APENAS o JSON conforme o schema definido, sem markdown nem texto fora do JSON.`;
+  const locationText = locationLabel(location);
+  const userPrompt = locale === "en"
+    ? `Create a social sentiment briefing about "${topic}" in ${locationText} using recent X posts. Return ONLY the JSON defined in the system schema.`
+    : locale === "es"
+      ? `Crea un briefing de sentimiento social sobre "${topic}" en ${locationText} usando publicaciones recientes de X. Devuelve SOLO el JSON definido en el esquema del sistema.`
+      : `Faça um briefing de sentimento social sobre "${topic}" em ${locationText} usando postagens recentes do X. Retorne APENAS o JSON definido no schema do sistema.`;
 
   try {
     const upstream = await fetch("https://api.x.ai/v1/responses", {
@@ -233,7 +277,7 @@ export async function handleGrokSentiment(req: IncomingMessage, res: ServerRespo
       body: JSON.stringify({
         model: "grok-4.20-0309-non-reasoning",
         input: [
-          { role: "system", content: SENTIMENT_SYSTEM_PROMPT },
+          { role: "system", content: buildSentimentSystemPrompt(locale, location) },
           { role: "user", content: userPrompt },
         ],
         // x_search server-side restrito aos últimos 3 dias.
@@ -254,7 +298,7 @@ export async function handleGrokSentiment(req: IncomingMessage, res: ServerRespo
       return;
     }
     const parsed = safeJsonParse(text);
-    setCached(topic, region, parsed);
+    setCached(topic, region, locale, location, parsed);
     res.setHeader("X-Cache", "MISS");
     sendJson(res, 200, parsed);
   } catch (e) {

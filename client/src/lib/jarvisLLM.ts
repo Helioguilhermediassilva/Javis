@@ -22,6 +22,12 @@ export interface AttachmentRef {
 }
 
 export type Honorific = "senhor" | "senhora";
+export type XavierLocale = "pt" | "en" | "es";
+export interface XavierLocation {
+  country: string;
+  state: string;
+  city: string;
+}
 
 export interface JarvisChatOptions {
   history: ChatMessage[];
@@ -31,6 +37,10 @@ export interface JarvisChatOptions {
   honorific?: Honorific;
   /** Roteamento: auto (padrão), grok ou claude; manus permanece como alias legado. */
   engine?: "auto" | "grok" | "claude" | "manus";
+  /** Idioma escolhido na sessão de login. */
+  locale?: XavierLocale;
+  /** Localização escolhida para briefings sociais. */
+  location?: XavierLocation;
   signal?: AbortSignal;
 }
 
@@ -62,12 +72,12 @@ export interface JarvisChatStreamOptions extends JarvisChatOptions, JarvisStream
  * disparando callbacks granulares. Resolve com a resposta final.
  */
 export async function jarvisChatStream(opts: JarvisChatStreamOptions): Promise<string> {
-  const { history, userMessage, attachments, honorific, engine, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onFile, onDone, onError } = opts;
+  const { history, userMessage, attachments, honorific, engine, locale, location, signal, onDelta, onToolStart, onToolEnd, onTaskStart, onFile, onDone, onError } = opts;
   const resp = await fetch("/api/jarvis/chat/stream", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific, engine }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, ...location }),
   });
   if (!resp.ok || !resp.body) {
     const text = await resp.text().catch(() => "");
@@ -161,12 +171,12 @@ export function createSentenceChunker(onSentence: (s: string) => void) {
   };
 }
 
-export async function jarvisChat({ history, userMessage, attachments, honorific, engine, signal }: JarvisChatOptions): Promise<string> {
+export async function jarvisChat({ history, userMessage, attachments, honorific, engine, locale, location, signal }: JarvisChatOptions): Promise<string> {
   const resp = await fetch("/api/jarvis/chat", {
     method: "POST",
     signal,
     headers: await authenticatedHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ history, userMessage, attachments, honorific, engine }),
+    body: JSON.stringify({ history, userMessage, attachments, honorific, engine, locale, ...location }),
   });
 
   if (!resp.ok) {

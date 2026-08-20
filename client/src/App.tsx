@@ -6,6 +6,7 @@ import type React from "react";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { LanguageProvider, useLanguage } from "./contexts/LanguageContext";
+import { LocationProvider } from "./contexts/LocationContext";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -54,9 +55,11 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <LanguageProvider>
-            <AuthProvider>
-              <Router />
-            </AuthProvider>
+            <LocationProvider>
+              <AuthProvider>
+                <Router />
+              </AuthProvider>
+            </LocationProvider>
           </LanguageProvider>
         </TooltipProvider>
       </ThemeProvider>

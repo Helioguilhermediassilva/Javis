@@ -1,10 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-
-/**
- * Painel de briefing social ao vivo sobre o DF.
- * Consulta /api/grok/sentiment a cada `refreshMs` ms e mostra top reclamações,
- * top elogios e hashtags em tempo real, no estilo HUD do JARVIS.
- */
+import { useLanguage } from "@/contexts/LanguageContext";
+import type { XavierLocale, XavierLocation } from "@/lib/jarvisLLM";
 
 interface SentimentItem {
   summary: string;
@@ -18,6 +14,7 @@ interface SentimentPayload {
   complaints?: SentimentItem[];
   praises?: SentimentItem[];
   hashtags?: string[];
+  summary?: string;
   summary_pt_br?: string;
   error?: string;
 }
@@ -25,32 +22,42 @@ interface SentimentPayload {
 interface DfBriefingPanelProps {
   topic?: string;
   region?: string;
+  locale?: XavierLocale;
+  location?: XavierLocation;
   refreshMs?: number;
 }
 
 const TOPIC_OPTIONS = [
-  { value: "geral", label: "GERAL" },
-  { value: "saúde", label: "SAÚDE" },
-  { value: "segurança", label: "SEGURANÇA" },
-  { value: "transporte", label: "MOBILIDADE" },
-  { value: "educação", label: "EDUCAÇÃO" },
-];
+  { value: "geral", key: "location.topicGeneral" },
+  { value: "saúde", key: "location.topicHealth" },
+  { value: "segurança", key: "location.topicSecurity" },
+  { value: "transporte", key: "location.topicMobility" },
+  { value: "educação", key: "location.topicEducation" },
+] as const;
 
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+function formatTime(ms: number, locale: XavierLocale): string {
+  const language = locale === "pt" ? "pt-BR" : locale === "es" ? "es-ES" : "en-US";
+  return new Intl.DateTimeFormat(language, { hour: "2-digit", minute: "2-digit" }).format(ms);
 }
 
 export default function DfBriefingPanel({
   topic: initialTopic = "geral",
-  region = "DF",
+  region = "Brasília",
+  locale = "pt",
+  location = { country: "Brasil", state: "Distrito Federal", city: "Brasília" },
   refreshMs = 15 * 60 * 1000,
 }: DfBriefingPanelProps) {
+  const { t } = useLanguage();
   const [topic, setTopic] = useState(initialTopic);
   const [data, setData] = useState<SentimentPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [lastFetched, setLastFetched] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setTopic(initialTopic);
+  }, [initialTopic]);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,7 +71,14 @@ export default function DfBriefingPanel({
         const r = await fetch("/api/grok/sentiment", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic, region }),
+          body: JSON.stringify({
+            topic,
+            region,
+            locale,
+            country: location.country,
+            state: location.state,
+            city: location.city,
+          }),
           signal: controller.signal,
         });
         if (!r.ok) {
@@ -94,7 +108,10 @@ export default function DfBriefingPanel({
       clearInterval(id);
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [topic, region, refreshMs]);
+  }, [topic, region, locale, location.country, location.state, location.city, refreshMs]);
+
+  const summary = data?.summary || data?.summary_pt_br;
+  const locationLabel = [location.city, location.state, location.country].filter(Boolean).join(" · ");
 
   return (
     <div
@@ -102,16 +119,16 @@ export default function DfBriefingPanel({
       style={{ color: "#7DD3FC", fontFamily: "JetBrains Mono, monospace" }}
     >
       <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1">
-          <span className="text-cyan-300">▸ BRIEFING SOCIAL · {region}</span>
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <span className="text-cyan-300">▸ {t("location.briefingTitle")} · {location.city || region}</span>
+          <span className="truncate text-[8px] text-cyan-500/70 normal-case">{locationLabel}</span>
         </div>
         <div className="flex items-center gap-2 text-[9px] opacity-70">
-          {loading && <span className="text-amber-400 animate-pulse">SYNC...</span>}
-          {!loading && lastFetched && <span>{formatTime(lastFetched)}</span>}
+          {loading && <span className="text-amber-400 animate-pulse">{t("location.sync")}</span>}
+          {!loading && lastFetched && <span>{t("location.updatedAt", { time: formatTime(lastFetched, locale) })}</span>}
         </div>
       </div>
 
-      {/* Topic selector */}
       <div className="flex gap-1 mb-2 flex-wrap">
         {TOPIC_OPTIONS.map((opt) => (
           <button
@@ -123,33 +140,33 @@ export default function DfBriefingPanel({
                 : "border-cyan-500/30 hover:border-cyan-400/60 hover:bg-cyan-400/10"
             }`}
           >
-            {opt.label}
+            {t(opt.key)}
           </button>
         ))}
       </div>
 
       {error && (
-        <div className="text-red-400 text-[9px] py-1 break-words">ERRO: {error}</div>
+        <div className="text-red-400 text-[9px] py-1 break-words">{t("location.error")}: {error}</div>
       )}
 
       {!error && !data && loading && (
-        <div className="opacity-70 py-2">Coletando menções no X...</div>
+        <div className="opacity-70 py-2 normal-case">{t("location.collecting")}</div>
       )}
 
       {!error && data && (
         <div className="space-y-2">
-          {data.summary_pt_br && (
+          {summary && (
             <div
               className="text-[10px] leading-tight border-l-2 border-cyan-400/60 pl-2 py-1"
               style={{ textTransform: "none", color: "#BAE6FD" }}
             >
-              {data.summary_pt_br}
+              {summary}
             </div>
           )}
 
           {Array.isArray(data.complaints) && data.complaints.length > 0 && (
             <div>
-              <div className="text-red-400 text-[9px] mb-1">▼ TOP RECLAMAÇÕES</div>
+              <div className="text-red-400 text-[9px] mb-1">▼ {t("location.complaints")}</div>
               <ul className="space-y-1">
                 {data.complaints.slice(0, 3).map((c, i) => (
                   <li key={i} className="leading-tight" style={{ textTransform: "none" }}>
@@ -163,7 +180,7 @@ export default function DfBriefingPanel({
 
           {Array.isArray(data.praises) && data.praises.length > 0 && (
             <div>
-              <div className="text-emerald-400 text-[9px] mb-1">▲ TOP ELOGIOS / O QUE DÁ CERTO</div>
+              <div className="text-emerald-400 text-[9px] mb-1">▲ {t("location.praises")}</div>
               <ul className="space-y-1">
                 {data.praises.slice(0, 3).map((p, i) => (
                   <li key={i} className="leading-tight" style={{ textTransform: "none" }}>
@@ -173,6 +190,10 @@ export default function DfBriefingPanel({
                 ))}
               </ul>
             </div>
+          )}
+
+          {(!data.complaints?.length && !data.praises?.length && !summary) && (
+            <div className="py-2 normal-case opacity-70">{t("location.noData")}</div>
           )}
 
           {Array.isArray(data.hashtags) && data.hashtags.length > 0 && (
@@ -189,3 +210,5 @@ export default function DfBriefingPanel({
     </div>
   );
 }
+
+export type { DfBriefingPanelProps };

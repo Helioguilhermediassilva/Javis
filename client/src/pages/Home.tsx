@@ -14,6 +14,8 @@ import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useLocation } from "@/contexts/LocationContext";
+import LocationSelector from "@/components/LocationSelector";
 
 const C = {
   BG: "#00060a",
@@ -69,6 +71,7 @@ function useSimulatedMetrics() {
 export default function Home() {
   const { user, signOut } = useAuth();
   const { t, locale } = useLanguage();
+  const { location } = useLocation();
   const browserLocale = locale === "pt" ? "pt-BR" : locale === "es" ? "es-ES" : "en-US";
   const [hudState, setHudState] = useState<HudState>("INITIALISING");
   const [muted, setMuted] = useState(false);
@@ -133,6 +136,8 @@ export default function Home() {
         userMessage: text,
         attachments: attachmentsToSend.length > 0 ? attachmentsToSend : undefined,
         honorific: prefsRef.current.honorific,
+        locale,
+        location,
         onDelta: (chunk) => {
           liveBuffer += chunk;
           setLogs((l) => {
@@ -483,7 +488,14 @@ export default function Home() {
             gap: "8px",
           }}
         >
-          <DfBriefingPanel topic="geral" region="DF" refreshMs={15 * 60 * 1000} />
+          <LocationSelector />
+          <DfBriefingPanel
+            topic="geral"
+            region={location.city || location.state}
+            locale={locale}
+            location={location}
+            refreshMs={15 * 60 * 1000}
+          />
         </aside>
 
         {/* CENTER */}
