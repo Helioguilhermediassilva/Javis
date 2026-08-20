@@ -53,9 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       void (async () => {
         try {
-          // O armazenamento é usado somente para atravessar rotas internas e renovar o token.
-          // No boot da aplicação, removemos a sessão anterior sem revogar a conta no Supabase.
-          await client.auth.signOut({ scope: "local" });
+          // Preserva a sessão local existente para que usuários já autenticados
+          // entrem diretamente no Xavier ao abrir a plataforma.
           const { data, error } = await client.auth.getSession();
           if (!mounted) return;
           if (error) setConfigurationError(error.message);

@@ -11,7 +11,7 @@ function isLocale(value: string | null): value is Locale {
 }
 
 export default function Login() {
-  const { signIn, signUp, configurationError } = useAuth();
+  const { session, loading, signIn, signUp, configurationError } = useAuth();
   const { locale, setLocale, t } = useLanguage();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [displayName, setDisplayName] = useState("");
@@ -27,6 +27,16 @@ export default function Login() {
       setLocale(requestedLocale);
     }
   }, [locale, setLocale]);
+
+  useEffect(() => {
+    if (loading || !session) return;
+    const requestedLocale = new URLSearchParams(window.location.search).get("locale");
+    const nextLocale = isLocale(requestedLocale) ? requestedLocale : locale;
+    const target = new URL("/", window.location.origin);
+    target.searchParams.set("locale", nextLocale);
+    target.searchParams.set("source", "nowgoai");
+    window.location.replace(target.toString());
+  }, [loading, locale, session]);
 
   function switchMode(next: "login" | "signup") {
     setMode(next);
