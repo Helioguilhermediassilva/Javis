@@ -1,16 +1,13 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
-
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const WEBHOOK_BASE_URL = (process.env.XAVIER_TELEGRAM_WEBHOOK_BASE_URL || "https://jarvisnowgo.com/api/telegram/webhook").replace(/\/+$/, "");
 const LINK_TTL_MS = 10 * 60 * 1000;
-
 interface TelegramApiResponse<T> {
   ok?: boolean;
   result?: T;
   description?: string;
 }
-
 export interface OfficialTelegramLink {
   id: string;
   user_id: string;
@@ -25,7 +22,6 @@ export interface OfficialTelegramLink {
   last_seen_at?: string | null;
   unlinked_at?: string | null;
 }
-
 interface OfficialTelegramLinkCode {
   id: string;
   user_id: string;
@@ -34,14 +30,12 @@ interface OfficialTelegramLinkCode {
   expires_at: string;
   consumed_at?: string | null;
 }
-
 interface TelegramBot {
   id: number;
   is_bot: boolean;
   first_name?: string;
   username?: string;
 }
-
 interface TelegramChat {
   id: number;
   type?: string;
@@ -49,7 +43,6 @@ interface TelegramChat {
   last_name?: string;
   username?: string;
 }
-
 interface TelegramUser {
   id: number;
   is_bot?: boolean;
@@ -57,33 +50,27 @@ interface TelegramUser {
   last_name?: string;
   username?: string;
 }
-
 export function getOfficialTelegramBotToken(): string {
   const token = process.env.TELEGRAM_OFFICIAL_BOT_TOKEN?.trim() || "";
   if (!token) throw new Error("TELEGRAM_OFFICIAL_BOT_TOKEN não configurado para o bot oficial");
   return token;
 }
-
 function officialWebhookSecret(): string {
   const secret = process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET?.trim() || process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
   if (!secret) throw new Error("TELEGRAM_OFFICIAL_WEBHOOK_SECRET não configurado para o bot oficial");
   return secret;
 }
-
 function hashCode(code: string): Buffer {
   return createHash("sha256").update(`xavier-official-telegram:${code}`).digest();
 }
-
 function hashCodeHex(code: string): string {
   return hashCode(code).toString("hex");
 }
-
 function safeEqualCode(expectedHex: string, code: string): boolean {
   const expected = Buffer.from(expectedHex, "hex");
   const actual = hashCode(code);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
-
 async function supabaseRequest(path: string, init: RequestInit = {}): Promise<Response> {
   return fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...init,
@@ -91,12 +78,10 @@ async function supabaseRequest(path: string, init: RequestInit = {}): Promise<Re
     signal: AbortSignal.timeout(8_000),
   });
 }
-
 async function rows<T>(response: Response, label: string): Promise<T[]> {
   if (!response.ok) throw new Error(`Supabase ${label} ${response.status}: ${(await response.text()).slice(0, 300)}`);
   return (await response.json().catch(() => [])) as T[];
 }
-
 async function telegramApi<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   const token = getOfficialTelegramBotToken();
   const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
@@ -114,7 +99,6 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
   }
   return data.result as T;
 }
-
 async function telegramMultipartApi<T>(method: string, form: FormData): Promise<T> {
   const token = getOfficialTelegramBotToken();
   const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
@@ -131,20 +115,16 @@ async function telegramMultipartApi<T>(method: string, form: FormData): Promise<
   }
   return data.result as T;
 }
-
 function configuredOfficialBotUsername(): string | null {
   const value = (process.env.TELEGRAM_OFFICIAL_BOT_USERNAME || "").trim().replace(/^@/, "");
   return value || null;
 }
-
 function chatUrl(username?: string | null): string | null {
   return username ? `https://t.me/${username}` : null;
 }
-
 export function isOfficialTelegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_OFFICIAL_BOT_TOKEN?.trim() && (process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET?.trim() || process.env.TELEGRAM_WEBHOOK_SECRET?.trim()));
 }
-
 export async function ensureOfficialXavierTelegramWebhook(): Promise<TelegramBot> {
   const bot = await telegramApi<TelegramBot>("getMe");
   await telegramApi("setWebhook", {
@@ -168,7 +148,6 @@ export async function ensureOfficialXavierTelegramWebhook(): Promise<TelegramBot
   });
   return bot;
 }
-
 export async function createOfficialTelegramLinkCode(userId: string, locale: "pt" | "en" | "es" = "pt"): Promise<{ code: string; deep_link: string; bot_username: string | null; expires_at: string }> {
   const bot = await ensureOfficialXavierTelegramWebhook();
   await supabaseRequest(`xavier_telegram_link_codes?user_id=eq.${encodeURIComponent(userId)}&consumed_at=is.null`, {
@@ -176,7 +155,6 @@ export async function createOfficialTelegramLinkCode(userId: string, locale: "pt
     headers: { Prefer: "return=minimal" },
     body: JSON.stringify({ consumed_at: new Date().toISOString() }),
   });
-
   const code = randomBytes(24).toString("base64url");
   const expiresAt = new Date(Date.now() + LINK_TTL_MS).toISOString();
   const response = await supabaseRequest("xavier_telegram_link_codes", {
@@ -185,7 +163,6 @@ export async function createOfficialTelegramLinkCode(userId: string, locale: "pt
     body: JSON.stringify({ user_id: userId, code_hash: hashCodeHex(code), locale, expires_at: expiresAt }),
   });
   await rows<OfficialTelegramLinkCode>(response, "official telegram link code insert");
-
   return {
     code,
     deep_link: `https://t.me/${bot.username || ""}?start=${encodeURIComponent(code)}`,
@@ -193,7 +170,6 @@ export async function createOfficialTelegramLinkCode(userId: string, locale: "pt
     expires_at: expiresAt,
   };
 }
-
 export async function getOfficialTelegramLinkForUser(userId: string): Promise<OfficialTelegramLink | null> {
   const params = new URLSearchParams({
     select: "id,user_id,telegram_chat_id,telegram_user_id,telegram_username,telegram_first_name,telegram_last_name,locale,status,linked_at,last_seen_at,unlinked_at",
@@ -204,7 +180,6 @@ export async function getOfficialTelegramLinkForUser(userId: string): Promise<Of
   const result = await rows<OfficialTelegramLink>(await supabaseRequest(`xavier_telegram_official_links?${params}`), "official telegram user link");
   return result[0] || null;
 }
-
 export async function getOfficialTelegramLinkByChat(chatId: string): Promise<OfficialTelegramLink | null> {
   const params = new URLSearchParams({
     select: "id,user_id,telegram_chat_id,telegram_user_id,telegram_username,telegram_first_name,telegram_last_name,locale,status,linked_at,last_seen_at,unlinked_at",
@@ -215,7 +190,6 @@ export async function getOfficialTelegramLinkByChat(chatId: string): Promise<Off
   const result = await rows<OfficialTelegramLink>(await supabaseRequest(`xavier_telegram_official_links?${params}`), "official telegram chat link");
   return result[0] || null;
 }
-
 export async function consumeOfficialTelegramLinkCode(code: string, chat: TelegramChat, from?: TelegramUser): Promise<OfficialTelegramLink> {
   const cleanCode = code.trim();
   if (!/^[A-Za-z0-9_-]{20,80}$/.test(cleanCode)) throw new Error("Código de vinculação inválido ou expirado.");
@@ -229,12 +203,10 @@ export async function consumeOfficialTelegramLinkCode(code: string, chat: Telegr
   const codeRows = await rows<OfficialTelegramLinkCode>(await supabaseRequest(`xavier_telegram_link_codes?${params}`), "official telegram link code lookup");
   const linkCode = codeRows[0];
   if (!linkCode || !safeEqualCode(linkCode.code_hash, cleanCode)) throw new Error("Código de vinculação inválido ou expirado.");
-
   const existingChatLink = await getOfficialTelegramLinkByChat(String(chat.id));
   if (existingChatLink && existingChatLink.user_id !== linkCode.user_id) {
     throw new Error("Este chat Telegram já está vinculado a outra conta Xavier.");
   }
-
   const existingUserLink = await getOfficialTelegramLinkForUser(linkCode.user_id);
   if (existingUserLink && existingUserLink.telegram_chat_id !== String(chat.id)) {
     await supabaseRequest(`xavier_telegram_official_links?id=eq.${encodeURIComponent(existingUserLink.id)}&user_id=eq.${encodeURIComponent(linkCode.user_id)}`, {
@@ -243,7 +215,6 @@ export async function consumeOfficialTelegramLinkCode(code: string, chat: Telegr
       body: JSON.stringify({ status: "unlinked", unlinked_at: new Date().toISOString() }),
     });
   }
-
   const now = new Date().toISOString();
   const payload = {
     user_id: linkCode.user_id,
@@ -275,7 +246,6 @@ export async function consumeOfficialTelegramLinkCode(code: string, chat: Telegr
     link = (await rows<OfficialTelegramLink>(response, "official telegram link insert"))[0];
   }
   if (!link) throw new Error("Não foi possível concluir a vinculação do Telegram.");
-
   const consumedResponse = await supabaseRequest(`xavier_telegram_link_codes?id=eq.${encodeURIComponent(linkCode.id)}&consumed_at=is.null`, {
     method: "PATCH",
     headers: { Prefer: "return=minimal" },
@@ -284,7 +254,6 @@ export async function consumeOfficialTelegramLinkCode(code: string, chat: Telegr
   if (!consumedResponse.ok) throw new Error("Não foi possível consumir o código de vinculação.");
   return link;
 }
-
 export async function touchOfficialTelegramLink(chatId: string): Promise<void> {
   await supabaseRequest(`xavier_telegram_official_links?telegram_chat_id=eq.${encodeURIComponent(chatId)}&status=eq.active`, {
     method: "PATCH",
@@ -292,7 +261,6 @@ export async function touchOfficialTelegramLink(chatId: string): Promise<void> {
     body: JSON.stringify({ last_seen_at: new Date().toISOString() }),
   });
 }
-
 export async function updateOfficialTelegramLocale(chatId: string, locale: "pt" | "en" | "es"): Promise<void> {
   const response = await supabaseRequest(`xavier_telegram_official_links?telegram_chat_id=eq.${encodeURIComponent(chatId)}&status=eq.active`, {
     method: "PATCH",
@@ -301,7 +269,6 @@ export async function updateOfficialTelegramLocale(chatId: string, locale: "pt" 
   });
   if (!response.ok) throw new Error(`Supabase official Telegram locale ${response.status}`);
 }
-
 export async function unlinkOfficialTelegram(userId: string): Promise<void> {
   const response = await supabaseRequest(`xavier_telegram_official_links?user_id=eq.${encodeURIComponent(userId)}&status=eq.active`, {
     method: "PATCH",
@@ -310,7 +277,6 @@ export async function unlinkOfficialTelegram(userId: string): Promise<void> {
   });
   if (!response.ok) throw new Error(`Supabase official Telegram unlink ${response.status}`);
 }
-
 export async function getOfficialTelegramStatus(userId: string): Promise<Record<string, unknown>> {
   if (!isOfficialTelegramConfigured()) return { mode: "official", configured: false, connected: false };
   const link = await getOfficialTelegramLinkForUser(userId);
@@ -333,22 +299,18 @@ export async function getOfficialTelegramStatus(userId: string): Promise<Record<
     link: link ? { linked_at: link.linked_at, last_seen_at: link.last_seen_at, locale: link.locale || "pt" } : undefined,
   };
 }
-
 export function verifyOfficialTelegramWebhookSecret(presentedSecret: string): boolean {
   const expected = officialWebhookSecret();
   const left = Buffer.from(expected);
   const right = Buffer.from(presentedSecret || "");
   return left.length > 0 && left.length === right.length && timingSafeEqual(left, right);
 }
-
 export async function sendOfficialTelegramTyping(chatId: string): Promise<void> {
   await telegramApi("sendChatAction", { chat_id: chatId, action: "typing" });
 }
-
 export async function sendOfficialTelegramMessage(chatId: string, text: string): Promise<void> {
   await telegramApi("sendMessage", { chat_id: chatId, text: text.slice(0, 4096), disable_web_page_preview: true });
 }
-
 export async function sendOfficialTelegramDocument(chatId: string, documentUrl: string, caption?: string, fileName = "xavier-arquivo.bin"): Promise<void> {
   const parsed = new URL(documentUrl);
   if (parsed.protocol !== "https:") throw new Error("Arquivo Telegram precisa usar URL HTTPS");

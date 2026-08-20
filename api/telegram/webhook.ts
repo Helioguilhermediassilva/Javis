@@ -351,12 +351,12 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
   crmFallback: string;
 }> = {
   pt: {
-    linkRequired: "Para usar o Xavier, abra o cockpit em https://jarvisnowgo.com/telegram-connect e gere um código de vinculação. Depois envie o código aqui.",
+    linkRequired: "Para usar o Xavier, abra o cockpit em https://jarvisnowgo.com/telegram-connect, gere o vínculo e escaneie o QR Code ou abra o link. Toque em Iniciar para concluir automaticamente.",
     linked: "Conta vinculada com segurança ao Xavier. Seus dados e sua memória permanecem isolados da conta Telegram.",
     invalidCode: "Não consegui validar este código. Gere um novo código no cockpit; cada código expira rapidamente e só pode ser usado uma vez.",
-    help: "Sou o Xavier — Inteligência Soberana. Envie uma mensagem ou áudio para conversar. Use /start com o código gerado no cockpit, /language pt, /language en, /language es ou /disconnect.",
+    help: "Sou o Xavier — Inteligência Soberana. Envie uma mensagem ou áudio para conversar. Para vincular, abra o QR Code ou o link gerado no cockpit e toque em Iniciar. Use /language pt, /language en, /language es ou /disconnect.",
     disconnected: "Este chat foi desvinculado da sua conta Xavier. Para vincular novamente, gere um novo código no cockpit.",
-    notLinked: "Este chat ainda não está vinculado. Gere um código em https://jarvisnowgo.com/telegram-connect e envie-o aqui.",
+    notLinked: "Este chat ainda não está vinculado. Abra https://jarvisnowgo.com/telegram-connect, gere o vínculo e escaneie o QR Code ou abra o link para tocar em Iniciar.",
     languageUpdated: "Idioma atualizado. A partir de agora responderei nesse idioma.",
     audioUnavailable: "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida.",
     quotaExceeded: "Senhor, o limite mensal desta conta foi atingido. Ajuste-o no painel web para continuar.",
@@ -365,12 +365,12 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     crmFallback: "Registro CRM processado.",
   },
   en: {
-    linkRequired: "To use Xavier, open the cockpit at https://jarvisnowgo.com/telegram-connect and generate a linking code. Then send the code here.",
+    linkRequired: "To use Xavier, open https://jarvisnowgo.com/telegram-connect, generate the link, then scan the QR Code or open it and tap Start to finish automatically.",
     linked: "Your account is securely linked to Xavier. Your data and memory remain isolated from this Telegram account.",
     invalidCode: "I could not validate this code. Generate a new one in the cockpit; each code expires quickly and can only be used once.",
-    help: "I am Xavier — Sovereign Intelligence. Send a message or audio to talk. Use /start with the code generated in the cockpit, /language pt, /language en, /language es, or /disconnect.",
+    help: "I am Xavier — Sovereign Intelligence. Send a message or audio to talk. To link, open the QR Code or link generated in the cockpit and tap Start. Use /language pt, /language en, /language es, or /disconnect.",
     disconnected: "This chat was unlinked from your Xavier account. Generate a new code in the cockpit to link again.",
-    notLinked: "This chat is not linked yet. Generate a code at https://jarvisnowgo.com/telegram-connect and send it here.",
+    notLinked: "This chat is not linked yet. Open https://jarvisnowgo.com/telegram-connect, generate the link, then scan the QR Code or open it and tap Start.",
     languageUpdated: "Language updated. I will reply in this language from now on.",
     audioUnavailable: "Sir, I could not hear that audio. Try sending a shorter, clearer recording.",
     quotaExceeded: "Sir, this account has reached its monthly limit. Adjust it in the web panel to continue.",
@@ -379,12 +379,12 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     crmFallback: "CRM record processed.",
   },
   es: {
-    linkRequired: "Para usar Xavier, abre el cockpit en https://jarvisnowgo.com/telegram-connect y genera un código de vinculación. Después envíalo aquí.",
+    linkRequired: "Para usar Xavier, abre https://jarvisnowgo.com/telegram-connect, genera el vínculo, escanea el código QR o abre el enlace y toca Iniciar para finalizar automáticamente.",
     linked: "Tu cuenta está vinculada de forma segura a Xavier. Tus datos y memoria permanecen aislados de esta cuenta de Telegram.",
     invalidCode: "No pude validar este código. Genera uno nuevo en el cockpit; cada código caduca rápidamente y solo puede usarse una vez.",
-    help: "Soy Xavier — Inteligencia Soberana. Envía un mensaje o audio para conversar. Usa /start con el código generado en el cockpit, /language pt, /language en, /language es o /disconnect.",
+    help: "Soy Xavier — Inteligencia Soberana. Envía un mensaje o audio para conversar. Para vincular, abre el código QR o enlace generado en el cockpit y toca Iniciar. Usa /language pt, /language en, /language es o /disconnect.",
     disconnected: "Este chat fue desvinculado de tu cuenta Xavier. Genera un nuevo código en el cockpit para vincularlo otra vez.",
-    notLinked: "Este chat todavía no está vinculado. Genera un código en https://jarvisnowgo.com/telegram-connect y envíalo aquí.",
+    notLinked: "Este chat todavía no está vinculado. Abre https://jarvisnowgo.com/telegram-connect, genera el vínculo, escanea el código QR o abre el enlace y toca Iniciar.",
     languageUpdated: "Idioma actualizado. A partir de ahora responderé en este idioma.",
     audioUnavailable: "Señor, no pude escuchar ese audio. Intenta enviar una grabación más corta y nítida.",
     quotaExceeded: "Señor, esta cuenta alcanzó su límite mensual. Ajústalo en el panel web para continuar.",
@@ -592,7 +592,7 @@ async function handleOfficialWebhook(req: VercelRequest, res: VercelResponse): P
   }
 
   const rawText = typeof message.text === "string" ? message.text.trim().slice(0, 4000) : "";
-  const startMatch = rawText.match(/^\/start(?:@[^\\s]+)?(?:\\s+(.+))?$/i);
+  const startMatch = rawText.match(/^\/start(?:@[^\s]+)?(?:\s+(.+))?$/i);
   if (startMatch) {
     const code = startMatch[1]?.trim() || "";
     if (!code) {
@@ -618,7 +618,7 @@ async function handleOfficialWebhook(req: VercelRequest, res: VercelResponse): P
     return null;
   });
   const currentLocale = normalizeOfficialLocale(currentLink?.locale);
-  const commandMatch = rawText.match(/^\/(help|language|disconnect)(?:@[^\\s]+)?(?:\\s+(.+))?$/i);
+  const commandMatch = rawText.match(/^\/(help|language|disconnect)(?:@[^\s]+)?(?:\s+(.+))?$/i);
   if (commandMatch?.[1]?.toLowerCase() === "help") {
     await sendOfficialTelegramText(chatId, officialTelegramText(currentLocale, "help"));
     json(res, 200, { ok: true, accepted: true, action: "help" });
