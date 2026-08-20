@@ -21,6 +21,7 @@ import {
   shouldUseClaudeTask,
 } from "./xavierClaude.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
+import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional do Distrito Federal desenvolvido pela NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
@@ -344,15 +345,36 @@ function honorificSystemMessage(honorific: ChatPayload["honorific"] | undefined)
   return null;
 }
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+const MAX_CHAT_BODY_BYTES = 12 * 1024 * 1024;
+
+function readJsonBody(req: IncomingMessage, maxBytes = MAX_CHAT_BODY_BYTES): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", (chunk) => { data += chunk.toString(); });
+    let size = 0;
+    let settled = false;
+    req.on("data", (chunk) => {
+      if (settled) return;
+      const value = chunk instanceof Buffer ? chunk : Buffer.from(String(chunk));
+      size += value.byteLength;
+      if (size > maxBytes) {
+        settled = true;
+        reject(new JarvisChatError(413, "Payload excede o limite permitido"));
+        return;
+      }
+      data += value.toString();
+    });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       if (!data) return resolve({});
       try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error);
+      }
+    });
   });
 }
 
@@ -668,7 +690,13 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     const error = authError
       ? new JarvisChatError(authError.status, authError.message)
       : e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
-    sendJson(res, error.status, { error: error.message });
+    const requestId = getXavierRequestId(req);
+    logXavierEvent(error.status >= 500 ? "error" : "warn", "chat.request_failed", {
+      request_id: requestId,
+      status: error.status,
+      error: error.message,
+    });
+    sendJson(res, error.status, { error: publicXavierError(error.status, error.message), request_id: requestId });
   }
 }
 
@@ -787,6 +815,8 @@ async function streamLlmRound(
 }
 
 export async function handleJarvisChatStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const requestId = getXavierRequestId(req);
+  res.setHeader("X-Request-Id", requestId);
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
     return;
@@ -797,7 +827,9 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   try {
     payload = (await readJsonBody(req)) as ChatPayload;
   } catch (e) {
-    sendJson(res, 400, { error: `Invalid JSON: ${(e as Error).message}` });
+    const message = (e as Error).message;
+    logXavierEvent("warn", "chat.stream_invalid_body", { request_id: requestId, error: message });
+    sendJson(res, e instanceof JarvisChatError ? e.status : 400, { error: publicXavierError(e instanceof JarvisChatError ? e.status : 400, message), request_id: requestId });
     return;
   }
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
@@ -817,7 +849,12 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     const error = authError
       ? new JarvisChatError(authError.status, authError.message)
       : e instanceof JarvisChatError ? e : new JarvisChatError(502, (e as Error).message);
-    sendJson(res, error.status, { error: error.message });
+    logXavierEvent(error.status >= 500 ? "error" : "warn", "chat.stream_prepare_failed", {
+      request_id: requestId,
+      status: error.status,
+      error: error.message,
+    });
+    sendJson(res, error.status, { error: publicXavierError(error.status, error.message), request_id: requestId });
     return;
   }
   const cleanedHistory = normalizeChatHistory(history);
@@ -857,7 +894,9 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         content: persistedUserContent(payload),
       });
     } catch (e) {
-      sseWrite(res, { type: "error", message: `Falha ao registrar a mensagem: ${(e as Error).message}` });
+      const message = (e as Error).message;
+      logXavierEvent("error", "chat.stream_persist_user_failed", { request_id: requestId, error: message });
+      sseWrite(res, { type: "error", message: publicXavierError(502, message), request_id: requestId });
       res.end();
       return;
     }
@@ -923,7 +962,9 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         sseWrite(res, { type: "done", reply, tools_used: result.tools_used, citations: result.citations, model: result.model, executor: "claude" });
       }
     } catch (error) {
-      sseWrite(res, { type: "error", message: (error as Error).message });
+      const message = (error as Error).message;
+      logXavierEvent("error", "chat.stream_claude_failed", { request_id: requestId, error: message });
+      sseWrite(res, { type: "error", message: publicXavierError(502, message), request_id: requestId });
     } finally {
       cleanup();
       try { res.end(); } catch {}
@@ -1050,6 +1091,8 @@ interface TtsPayload {
 const DEFAULT_VOICE_ID = "F1W6zKJWyDQD3yKJc4A6";
 
 export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const requestId = getXavierRequestId(req);
+  res.setHeader("X-Request-Id", requestId);
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Method not allowed" });
     return;
@@ -1098,7 +1141,8 @@ export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse)
     );
     if (!upstream.ok || !upstream.body) {
       const errText = upstream.body ? await upstream.text() : "empty response";
-      sendJson(res, 502, { error: `Upstream ${upstream.status}: ${errText.slice(0, 300)}` });
+      logXavierEvent("error", "tts.provider_failed", { request_id: requestId, status: upstream.status, error: errText });
+      sendJson(res, 502, { error: publicXavierError(502, errText), request_id: requestId });
       return;
     }
     // Encaminha os chunks MP3 ao cliente conforme chegam (Transfer-Encoding: chunked).
@@ -1123,8 +1167,10 @@ export async function handleJarvisTts(req: IncomingMessage, res: ServerResponse)
       res.end();
     }
   } catch (e) {
+    const message = (e as Error).message;
+    logXavierEvent("error", "tts.failed", { request_id: requestId, error: message });
     if (!res.headersSent) {
-      sendJson(res, 502, { error: `Network error: ${(e as Error).message}` });
+      sendJson(res, 502, { error: publicXavierError(502, message), request_id: requestId });
     } else {
       try { res.end(); } catch {}
     }
