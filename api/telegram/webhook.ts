@@ -11,7 +11,7 @@ import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegra
 import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../server/telegramAudio.js";
 import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
-import { isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
+import { getTelegramClaudeTimeoutMs, isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
 import { handleXavierCrmRequest } from "../../server/xavierCrmAgent.js";
 import {
   decryptXavierTelegramToken,
@@ -44,7 +44,9 @@ import {
   maybeCompactXavierConversation,
 } from "../../server/xavierMemory.js";
 
-export const config = { maxDuration: 60 };
+// Áudio + transcrição + web_search pode ultrapassar o orçamento padrão de 60 s.
+// O projeto usa waitUntil para concluir o processamento depois do ACK do Telegram.
+export const config = { maxDuration: 120 };
 
 interface TelegramChat { id: number; }
 interface TelegramUser { id: number; username?: string; is_bot?: boolean; }
@@ -348,6 +350,9 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
   audioUnavailable: string;
   quotaExceeded: string;
   temporaryFailure: string;
+  researchStarted: string;
+  researchFailure: string;
+  researchUnavailable: string;
   claudeUnavailable: string;
   crmFallback: string;
 }> = {
@@ -362,6 +367,9 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     audioUnavailable: "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida.",
     quotaExceeded: "Senhor, o limite mensal desta conta foi atingido. Ajuste-o no painel web para continuar.",
     temporaryFailure: "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes.",
+    researchStarted: "Entendi o áudio. Vou pesquisar agora e já retorno com as fontes.",
+    researchFailure: "Consegui ouvir o áudio, mas a pesquisa demorou além do limite. Tente novamente com uma pergunta mais curta.",
+    researchUnavailable: "Consegui ouvir o áudio, mas a pesquisa não pôde ser concluída agora. Tente novamente em instantes.",
     claudeUnavailable: "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.",
     crmFallback: "Registro CRM processado.",
   },
@@ -376,6 +384,9 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     audioUnavailable: "Sir, I could not hear that audio. Try sending a shorter, clearer recording.",
     quotaExceeded: "Sir, this account has reached its monthly limit. Adjust it in the web panel to continue.",
     temporaryFailure: "Sir, I encountered a temporary failure while processing your request. Please try again shortly.",
+    researchStarted: "I understood the audio. I will search now and return with the sources.",
+    researchFailure: "I understood the audio, but the search took too long. Please try again with a shorter question.",
+    researchUnavailable: "I understood the audio, but the search could not be completed right now. Please try again shortly.",
     claudeUnavailable: "Sir, Claude is not configured on the server yet. Configure ANTHROPIC_API_KEY in Vercel and redeploy.",
     crmFallback: "CRM record processed.",
   },
@@ -390,6 +401,9 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     audioUnavailable: "Señor, no pude escuchar ese audio. Intenta enviar una grabación más corta y nítida.",
     quotaExceeded: "Señor, esta cuenta alcanzó su límite mensual. Ajústalo en el panel web para continuar.",
     temporaryFailure: "Señor, encontré un fallo temporal al procesar tu solicitud. Inténtalo de nuevo en unos instantes.",
+    researchStarted: "Entendí el audio. Voy a buscar ahora y volveré con las fuentes.",
+    researchFailure: "Entendí el audio, pero la búsqueda tardó demasiado. Inténtalo de nuevo con una pregunta más corta.",
+    researchUnavailable: "Entendí el audio, pero la búsqueda no pudo completarse ahora. Inténtalo de nuevo en unos instantes.",
     claudeUnavailable: "Señor, Claude todavía no está configurado en el servidor. Configura ANTHROPIC_API_KEY en Vercel y vuelve a desplegar.",
     crmFallback: "Registro CRM procesado.",
   },
@@ -420,6 +434,8 @@ async function processOfficialTelegramMessage(input: {
   const { link, update, message, chatId, audio } = input;
   const locale = normalizeOfficialLocale(link.locale);
   let text = input.initialText;
+  let audioTranscriptionCompleted = false;
+  let researchRequested = false;
   try {
     await touchOfficialTelegramLink(chatId).catch((error) => {
       console.warn("[telegram:official] last-seen update failed", (error as Error).message);
@@ -441,6 +457,7 @@ async function processOfficialTelegramMessage(input: {
         characters: transcription.length,
       });
       text = text ? `${text}\n\n[Áudio transcrito]\n${transcription}` : transcription;
+      audioTranscriptionCompleted = true;
     }
     if (!text) {
       await sendOfficialTelegramText(chatId, officialTelegramText(locale, "audioUnavailable"));
@@ -505,9 +522,17 @@ async function processOfficialTelegramMessage(input: {
       return;
     }
 
+    researchRequested = shouldUseWebSearchForRequest(text);
+    if (audio && researchRequested) {
+      await sendOfficialTelegramText(chatId, officialTelegramText(locale, "researchStarted"));
+    }
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
-    const claudeTimeoutMs = audio ? 25_000 : 45_000;
+    // A transcrição de áudio consome parte do tempo antes da pesquisa começar.
+    // Reserve tempo suficiente para o Claude executar a busca e redigir as fontes.
+    const claudeTimeoutMs = audio
+      ? (researchRequested ? 65_000 : 35_000)
+      : (researchRequested ? 65_000 : 45_000);
     console.info("[telegram:official] request routed", {
       updateId: update.update_id,
       userId: link.user_id,
@@ -553,7 +578,7 @@ async function processOfficialTelegramMessage(input: {
       history: previousHistory,
       systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
       userMessage: text,
-      useWebSearch: shouldUseWebSearchForRequest(text),
+      useWebSearch: researchRequested,
       timeoutMs: claudeTimeoutMs,
     });
     const reply = appendClaudeCitations(result.reply, result.citations);
@@ -570,8 +595,16 @@ async function processOfficialTelegramMessage(input: {
     });
     await sendOfficialTelegramText(chatId, reply);
   } catch (error) {
-    console.error("[telegram:official] async webhook error", { userId: link.user_id, updateId: update.update_id, error: (error as Error).message });
-    const fallback = audio ? officialTelegramText(locale, "audioUnavailable") : officialTelegramText(locale, "temporaryFailure");
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error("[telegram:official] async webhook error", { userId: link.user_id, updateId: update.update_id, error: errorMessage });
+    const researchTimedOut = researchRequested && /abort|timeout|timed out|timedout/i.test(errorMessage);
+    const fallback = audio && !audioTranscriptionCompleted
+      ? officialTelegramText(locale, "audioUnavailable")
+      : researchTimedOut
+        ? officialTelegramText(locale, "researchFailure")
+        : researchRequested
+          ? officialTelegramText(locale, "researchUnavailable")
+          : officialTelegramText(locale, "temporaryFailure");
     try { await sendOfficialTelegramText(chatId, fallback); } catch (sendError) { console.error("[telegram:official] error notification failed", (sendError as Error).message); }
   }
 }
@@ -713,7 +746,8 @@ async function processLegacyTelegramMessage(input: {
 
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
-    const claudeTimeoutMs = audio ? 25_000 : 45_000;
+    const researchRequested = shouldUseWebSearchForRequest(text);
+    const claudeTimeoutMs = getTelegramClaudeTimeoutMs({ hasAudio: Boolean(audio), useWebSearch: researchRequested });
     console.info("[telegram] request routed", {
       updateId: update.update_id,
       requestIsPdf,
@@ -756,7 +790,7 @@ async function processLegacyTelegramMessage(input: {
       history: previousHistory,
       systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
       userMessage: text,
-      useWebSearch: shouldUseWebSearchForRequest(text),
+      useWebSearch: researchRequested,
       timeoutMs: claudeTimeoutMs,
     });
     const reply = appendClaudeCitations(result.reply, result.citations);

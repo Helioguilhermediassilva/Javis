@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "./xavierArtifacts.js";
+import { getTelegramClaudeTimeoutMs, isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "./xavierArtifacts.js";
 import { renderXavierPresentationBuffer } from "./xavierPresentation.js";
 
 describe("xavier artifacts", () => {
@@ -22,6 +22,13 @@ describe("xavier artifacts", () => {
   it("habilita pesquisa web apenas quando o pedido depende de informação externa", () => {
     expect(shouldUseWebSearchForRequest("Pesquise tendências recentes no YouTube")).toBe(true);
     expect(shouldUseWebSearchForRequest("Gere um PDF com este texto")).toBe(false);
+  });
+
+  it("usa uma janela maior para pesquisa iniciada por áudio", () => {
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: true })).toBe(65_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: true })).toBe(65_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: false })).toBe(35_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: false })).toBe(45_000);
   });
 
   it("renderiza uma apresentação PPTX editável", async () => {

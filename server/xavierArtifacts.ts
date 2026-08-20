@@ -23,3 +23,15 @@ export function shouldUseWebSearchForRequest(message: string): boolean {
   const text = normalize(message);
   return /\b(?:pesquis|internet|atual|recent|tendenc|noticia|mercado|benchmark|compar|youtube|google|instagram|tiktok|comentario|video|fonte|dados)\b/i.test(text);
 }
+
+/**
+ * A pesquisa nativa do Claude pode fazer múltiplas consultas antes de retornar.
+ * O áudio já consome parte do orçamento com download e transcrição, portanto
+ * precisa de uma janela maior quando também exige pesquisa externa.
+ */
+export function getTelegramClaudeTimeoutMs(input: { hasAudio: boolean; useWebSearch: boolean }): number {
+  if (input.hasAudio && input.useWebSearch) return 65_000;
+  if (input.useWebSearch) return 65_000;
+  if (input.hasAudio) return 35_000;
+  return 45_000;
+}
