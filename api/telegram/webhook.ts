@@ -457,7 +457,6 @@ async function processOfficialTelegramMessage(input: {
     const conversation = await ensureXavierConversation({
       userId: link.user_id,
       channel: "telegram",
-      telegramConnectionId: link.id,
       telegramChatId: chatId,
       title: "Telegram Xavier — bot oficial",
     });

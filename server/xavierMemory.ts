@@ -119,8 +119,15 @@ export async function ensureXavierConversation(input: {
     limit: "1",
   });
   if (input.channel === "telegram") {
-    if (!input.telegramConnectionId || !input.telegramChatId) throw new Error("Identidade Telegram incompleta");
-    params.set("telegram_connection_id", `eq.${input.telegramConnectionId}`);
+    if (!input.telegramChatId) throw new Error("Identidade Telegram incompleta");
+    if (input.telegramConnectionId) {
+      params.set("telegram_connection_id", `eq.${input.telegramConnectionId}`);
+    } else {
+      // O bot oficial não possui uma linha em xavier_telegram_connections.
+      // A identidade oficial é user_id + telegram_chat_id; o vínculo legado
+      // continua usando telegram_connection_id normalmente.
+      params.set("telegram_connection_id", "is.null");
+    }
     params.set("telegram_chat_id", `eq.${input.telegramChatId}`);
   }
   const existing = await readRows<XavierConversation>(await supabaseRequest(`${CONVERSATION_TABLE}?${params}`), "conversation");
