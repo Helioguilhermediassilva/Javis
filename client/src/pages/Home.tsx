@@ -83,7 +83,9 @@ export default function Home() {
   const [clock, setClock] = useState("");
   const [date, setDate] = useState("");
   const [inputText, setInputText] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [showActionMenu, setShowActionMenu] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const mutedRef = useRef(false);
   const historyRef = useRef<ChatMessage[]>([]);
   const processingRef = useRef(false);
@@ -347,7 +349,8 @@ export default function Home() {
     const text = inputText.trim();
     if (!text && pendingAttachmentsRef.current.length === 0) return;
     setInputText("");
-    processCommand(text);
+    setShowActionMenu(false);
+    void processCommand(text);
   }, [inputText, processCommand]);
 
   const handleFileSelected = useCallback(async (file: File) => {
@@ -382,6 +385,41 @@ export default function Home() {
     setActiveFileId(null);
     if (user?.id) window.sessionStorage.removeItem(`xavier-active-file:${user.id}`);
   }, [user?.id]);
+
+  const handlePromptKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      handleSend();
+    }
+  }, [handleSend]);
+
+  const handleQuickFileChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (file) void handleFileSelected(file);
+    setShowActionMenu(false);
+  }, [handleFileSelected]);
+
+  const startNewConversation = useCallback(() => {
+    if (processingRef.current) return;
+    historyRef.current = [];
+    setLogs([]);
+    setGeneratedFiles([]);
+    setInputText("");
+    handleFileClear();
+    setShowActionMenu(false);
+    setHudState("LISTENING");
+  }, [handleFileClear]);
+
+  const handleQuickMicrophone = useCallback(() => {
+    setShowActionMenu(false);
+    toggleMute();
+  }, [toggleMute]);
+
+  const handleQuickFullscreen = useCallback(() => {
+    setShowActionMenu(false);
+    toggleFullscreen();
+  }, [toggleFullscreen]);
 
   // Uptime simulation
   const [uptime, setUptime] = useState("00:00");
@@ -550,7 +588,7 @@ export default function Home() {
           <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
             ▸ {t("home.activity")}
           </div>
-          <LogWidget logs={logs} />
+          <LogWidget logs={logs} compact />
 
           {generatedFiles.length > 0 && (
             <div className="shrink-0" style={{ border: `1px solid ${C.BORDER}`, background: C.PANEL, padding: "6px" }}>
@@ -582,6 +620,7 @@ export default function Home() {
             onFileSelected={handleFileSelected}
             currentFile={currentFile}
             onClear={handleFileClear}
+            compact
           />
           <div className="text-[7px]" style={{ color: C.TEXT_MED }}>
             {currentFile
@@ -594,60 +633,118 @@ export default function Home() {
           <div className="text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
             ▸ {t("home.command")}
           </div>
-          <div className="flex gap-1.5 shrink-0">
+          <div className="relative shrink-0">
             <input
-              ref={inputRef}
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") handleSend(); }}
-              placeholder={t("home.commandPlaceholder")}
-              className="flex-1 h-[30px] px-2 text-[9px] rounded-sm outline-none transition-colors"
-              style={{
-                background: "#000d14",
-                color: C.WHITE,
-                border: `1px solid ${C.BORDER}`,
-                fontFamily: "'JetBrains Mono', monospace",
-              }}
-              onFocus={(e) => (e.target.style.borderColor = C.PRI)}
-              onBlur={(e) => (e.target.style.borderColor = C.BORDER)}
+              ref={attachmentInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleQuickFileChange}
             />
-            <button
-              onClick={handleSend}
-              className="w-[30px] h-[30px] text-[11px] font-bold rounded-sm shrink-0 transition-all hover:brightness-125"
-              style={{
-                background: C.PANEL,
-                color: C.PRI,
-                border: `1px solid ${C.PRI_DIM}`,
-              }}
+            {showActionMenu && (
+              <div
+                className="absolute bottom-[calc(100%+6px)] left-0 z-30 w-[220px] rounded-sm p-1.5 shadow-2xl"
+                style={{ background: C.DARK, border: `1px solid ${C.BORDER_B}` }}
+              >
+                <div className="px-2 pb-1.5 text-[7px] font-bold tracking-wider" style={{ color: C.PRI_DIM }}>
+                  {t("home.command")}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowActionMenu(false); attachmentInputRef.current?.click(); }}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-[8px] transition-colors hover:brightness-125"
+                  style={{ color: C.TEXT, background: "transparent" }}
+                >
+                  <span className="text-[13px]" style={{ color: C.GREEN }}>＋</span>
+                  {t("home.actionAttach")}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleQuickMicrophone}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-[8px] transition-colors hover:brightness-125"
+                  style={{ color: muted ? C.MUTED_C : C.TEXT, background: "transparent" }}
+                >
+                  <span className="text-[13px]">{muted ? "🔇" : "🎙"}</span>
+                  {t("home.actionMicrophone")}
+                  <span className="ml-auto text-[7px]" style={{ color: C.TEXT_DIM }}>{muted ? "OFF" : "ON"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleQuickFullscreen}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-[8px] transition-colors hover:brightness-125"
+                  style={{ color: C.TEXT, background: "transparent" }}
+                >
+                  <span className="text-[13px]">⛶</span>
+                  {t("home.actionFullscreen")}
+                  <span className="ml-auto text-[7px]" style={{ color: C.TEXT_DIM }}>F11</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={startNewConversation}
+                  className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-[8px] transition-colors hover:brightness-125"
+                  style={{ color: C.ACC2, background: "transparent" }}
+                >
+                  <span className="text-[13px]">↻</span>
+                  {t("home.actionNewConversation")}
+                </button>
+              </div>
+            )}
+
+            <div
+              className="rounded-sm p-1.5"
+              style={{ background: "#000d14", border: `1px solid ${C.BORDER}` }}
             >
-              ▸
-            </button>
+              <div className="flex items-start gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowActionMenu((visible) => !visible)}
+                  className="flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-sm text-[18px] leading-none transition-all hover:brightness-125"
+                  style={{ background: C.PANEL, color: C.PRI, border: `1px solid ${C.PRI_DIM}` }}
+                  aria-label={t("home.actionAttach")}
+                  title={t("home.actionAttach")}
+                >
+                  +
+                </button>
+                <textarea
+                  ref={inputRef}
+                  rows={3}
+                  value={inputText}
+                  onChange={(event) => setInputText(event.target.value)}
+                  onKeyDown={handlePromptKeyDown}
+                  placeholder={t("home.commandPlaceholder")}
+                  className="min-h-[70px] flex-1 resize-none bg-transparent px-1 py-1 text-[10px] leading-relaxed outline-none"
+                  style={{ color: C.WHITE, fontFamily: "'JetBrains Mono', monospace" }}
+                />
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-2 border-t pt-1.5" style={{ borderColor: C.BORDER }}>
+                <div className="flex min-w-0 items-center gap-2">
+                  {currentFile && (
+                    <button
+                      type="button"
+                      onClick={handleFileClear}
+                      className="flex min-w-0 max-w-[170px] items-center gap-1 rounded-sm px-1.5 py-1 text-[7px] transition-colors hover:brightness-125"
+                      style={{ color: C.GREEN, background: "#00140a", border: `1px solid ${C.GREEN_D}` }}
+                      title={t("home.fileReady", { file: currentFile.name })}
+                    >
+                      <span>📎</span>
+                      <span className="truncate">{currentFile.name}</span>
+                      <span>×</span>
+                    </button>
+                  )}
+                  <span className="text-[7px]" style={{ color: C.TEXT_DIM }}>{t("home.promptHint")}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSend}
+                  disabled={!inputText.trim() && pendingAttachments.length === 0}
+                  className="flex h-[28px] w-[32px] shrink-0 items-center justify-center rounded-sm text-[15px] font-bold transition-all hover:brightness-125 disabled:cursor-not-allowed disabled:opacity-40"
+                  style={{ background: C.PANEL, color: C.PRI, border: `1px solid ${C.PRI_DIM}` }}
+                  aria-label={t("home.command")}
+                >
+                  ↑
+                </button>
+              </div>
+            </div>
           </div>
-
-          <button
-            onClick={toggleMute}
-            className="h-[30px] text-[8px] font-bold rounded-sm transition-all shrink-0"
-            style={{
-              background: muted ? "#140006" : "#00140a",
-              color: muted ? C.MUTED_C : C.GREEN,
-              border: `1px solid ${muted ? C.MUTED_C : C.GREEN}`,
-            }}
-          >
-            {muted ? `🔇  ${t("home.microphoneMuted")}` : `🎙  ${t("home.microphoneActive")}`}
-          </button>
-
-          <button
-            onClick={toggleFullscreen}
-            className="h-[26px] text-[7px] rounded-sm transition-all shrink-0"
-            style={{
-              background: "transparent",
-              color: C.TEXT_MED,
-              border: `1px solid ${C.BORDER}`,
-            }}
-          >
-            ⛶  {t("home.fullscreen")}  [F11]
-          </button>
         </aside>
       </div>
 
