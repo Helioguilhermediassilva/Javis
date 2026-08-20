@@ -720,6 +720,22 @@ export default function Home() {
                   className="min-h-[70px] flex-1 resize-none bg-transparent px-1 py-1 text-[10px] leading-relaxed outline-none"
                   style={{ color: C.WHITE, fontFamily: "'JetBrains Mono', monospace" }}
                 />
+                <button
+                  type="button"
+                  onClick={toggleMute}
+                  className="flex h-[32px] min-w-[38px] shrink-0 flex-col items-center justify-center gap-0.5 rounded-sm text-[11px] leading-none transition-all hover:brightness-125"
+                  style={{
+                    background: muted ? "#160b12" : "#00140a",
+                    color: muted ? C.MUTED_C : C.GREEN,
+                    border: `1px solid ${muted ? C.MUTED_C : C.GREEN_D}`,
+                  }}
+                  aria-label={t("home.actionMicrophone")}
+                  aria-pressed={!muted}
+                  title={t("home.actionMicrophone")}
+                >
+                  <span>{muted ? "🔇" : "🎙"}</span>
+                  <span className="text-[6px] font-bold tracking-wider">{muted ? "OFF" : "ON"}</span>
+                </button>
               </div>
               <div className="mt-1 flex items-center justify-between gap-2 border-t pt-1.5" style={{ borderColor: C.BORDER }}>
                 <div className="flex min-w-0 items-center gap-2">
