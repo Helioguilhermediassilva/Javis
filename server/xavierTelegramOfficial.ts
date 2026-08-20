@@ -106,7 +106,12 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
     signal: AbortSignal.timeout(12_000),
   });
   const data = (await response.json().catch(() => ({}))) as TelegramApiResponse<T>;
-  if (!response.ok || !data.ok) throw new Error(data.description || `Telegram ${method} ${response.status}`);
+  if (!response.ok || !data.ok) {
+    if (response.status === 404) {
+      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_BOT_TOKEN com o token atual do BotFather.");
+    }
+    throw new Error(data.description || `Telegram ${method} ${response.status}`);
+  }
   return data.result as T;
 }
 
@@ -118,8 +123,18 @@ async function telegramMultipartApi<T>(method: string, form: FormData): Promise<
     signal: AbortSignal.timeout(12_000),
   });
   const data = (await response.json().catch(() => ({}))) as TelegramApiResponse<T>;
-  if (!response.ok || !data.ok) throw new Error(data.description || `Telegram ${method} ${response.status}`);
+  if (!response.ok || !data.ok) {
+    if (response.status === 404) {
+      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_BOT_TOKEN com o token atual do BotFather.");
+    }
+    throw new Error(data.description || `Telegram ${method} ${response.status}`);
+  }
   return data.result as T;
+}
+
+function configuredOfficialBotUsername(): string | null {
+  const value = (process.env.TELEGRAM_OFFICIAL_BOT_USERNAME || "").trim().replace(/^@/, "");
+  return value || null;
 }
 
 function chatUrl(username?: string | null): string | null {
@@ -299,16 +314,18 @@ export async function unlinkOfficialTelegram(userId: string): Promise<void> {
 export async function getOfficialTelegramStatus(userId: string): Promise<Record<string, unknown>> {
   if (!isOfficialTelegramConfigured()) return { mode: "official", configured: false, connected: false };
   const link = await getOfficialTelegramLinkForUser(userId);
-  const bot = await telegramApi<TelegramBot>("getMe");
+  // O status da sessão não deve depender de uma chamada externa ao Telegram.
+  // A API pode estar momentaneamente indisponível mesmo com o vínculo persistido.
+  const botUsername = configuredOfficialBotUsername();
   return {
     mode: "official",
     configured: true,
     connected: Boolean(link),
     connection: link ? {
       id: link.id,
-      bot_username: bot.username || null,
+      bot_username: botUsername,
       bot_display_name: "Xavier",
-      bot_chat_url: chatUrl(bot.username),
+      bot_chat_url: chatUrl(botUsername),
       status: "active",
       last_verified_at: link.last_seen_at || link.linked_at || null,
       locale: link.locale || "pt",

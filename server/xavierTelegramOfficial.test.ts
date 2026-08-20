@@ -108,4 +108,34 @@ describe("xavierTelegramOfficial", () => {
     const consumedCall = fetchMock.mock.calls.find(([input, init]) => String(input).includes("xavier_telegram_link_codes?id=eq.code-1") && init?.method === "PATCH");
     expect(consumedCall).toBeTruthy();
   });
+
+  it("consulta o vínculo por usuário sem depender de getMe do Telegram", async () => {
+    const link = {
+      id: "link-user-2",
+      user_id: "user-2",
+      telegram_chat_id: "222333",
+      telegram_user_id: "555",
+      telegram_username: "user2",
+      telegram_first_name: "User",
+      telegram_last_name: null,
+      locale: "pt" as const,
+      status: "active" as const,
+      linked_at: "2026-08-20T00:00:00.000Z",
+      last_seen_at: "2026-08-20T00:05:00.000Z",
+      unlinked_at: null,
+    };
+    const fetchMock: FetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("xavier_telegram_official_links")) return jsonResponse([link]);
+      throw new Error(`Unexpected external request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await official.getOfficialTelegramStatus("user-2");
+
+    expect(result.connected).toBe(true);
+    expect((result.connection as { id?: string }).id).toBe("link-user-2");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes("api.telegram.org"))).toBe(false);
+  });
 });

@@ -65,7 +65,7 @@ function friendlyTelegramError(error: unknown, fallback: string): string {
 
 export default function TelegramConnect() {
   const [, navigate] = useLocation();
-  const { user, signOut } = useAuth();
+  const { user, loading: authLoading, signOut } = useAuth();
   const { locale, t } = useLanguage();
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [linkCode, setLinkCode] = useState<TelegramLinkCode | null>(null);
@@ -94,8 +94,9 @@ export default function TelegramConnect() {
   }, [t]);
 
   useEffect(() => {
+    if (authLoading || !user) return;
     void loadStatus();
-  }, [loadStatus]);
+  }, [authLoading, loadStatus, user]);
 
   useEffect(() => {
     if (!linkCode || status?.connected) return;
