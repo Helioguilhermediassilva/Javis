@@ -58,9 +58,9 @@ interface TelegramUser {
   username?: string;
 }
 
-function officialBotToken(): string {
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN não configurado para o bot oficial");
+export function getOfficialTelegramBotToken(): string {
+  const token = process.env.TELEGRAM_OFFICIAL_BOT_TOKEN?.trim() || "";
+  if (!token) throw new Error("TELEGRAM_OFFICIAL_BOT_TOKEN não configurado para o bot oficial");
   return token;
 }
 
@@ -98,7 +98,7 @@ async function rows<T>(response: Response, label: string): Promise<T[]> {
 }
 
 async function telegramApi<T>(method: string, body?: Record<string, unknown>): Promise<T> {
-  const token = officialBotToken();
+  const token = getOfficialTelegramBotToken();
   const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
     method: body ? "POST" : "GET",
     headers: { "Content-Type": "application/json" },
@@ -108,7 +108,7 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
   const data = (await response.json().catch(() => ({}))) as TelegramApiResponse<T>;
   if (!response.ok || !data.ok) {
     if (response.status === 404) {
-      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_BOT_TOKEN com o token atual do BotFather.");
+      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_OFFICIAL_BOT_TOKEN com o token atual do BotFather.");
     }
     throw new Error(data.description || `Telegram ${method} ${response.status}`);
   }
@@ -116,7 +116,7 @@ async function telegramApi<T>(method: string, body?: Record<string, unknown>): P
 }
 
 async function telegramMultipartApi<T>(method: string, form: FormData): Promise<T> {
-  const token = officialBotToken();
+  const token = getOfficialTelegramBotToken();
   const response = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token)}/${method}`, {
     method: "POST",
     body: form,
@@ -125,7 +125,7 @@ async function telegramMultipartApi<T>(method: string, form: FormData): Promise<
   const data = (await response.json().catch(() => ({}))) as TelegramApiResponse<T>;
   if (!response.ok || !data.ok) {
     if (response.status === 404) {
-      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_BOT_TOKEN com o token atual do BotFather.");
+      throw new Error("Token do bot oficial Telegram inválido ou bot inexistente. Configure TELEGRAM_OFFICIAL_BOT_TOKEN com o token atual do BotFather.");
     }
     throw new Error(data.description || `Telegram ${method} ${response.status}`);
   }
@@ -142,7 +142,7 @@ function chatUrl(username?: string | null): string | null {
 }
 
 export function isOfficialTelegramConfigured(): boolean {
-  return Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim() && (process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET?.trim() || process.env.TELEGRAM_WEBHOOK_SECRET?.trim()));
+  return Boolean(process.env.TELEGRAM_OFFICIAL_BOT_TOKEN?.trim() && (process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET?.trim() || process.env.TELEGRAM_WEBHOOK_SECRET?.trim()));
 }
 
 export async function ensureOfficialXavierTelegramWebhook(): Promise<TelegramBot> {

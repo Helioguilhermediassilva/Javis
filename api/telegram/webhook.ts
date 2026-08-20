@@ -31,6 +31,7 @@ import {
   unlinkOfficialTelegram,
   updateOfficialTelegramLocale,
   verifyOfficialTelegramWebhookSecret,
+  getOfficialTelegramBotToken,
   type OfficialTelegramLink,
 } from "../../server/xavierTelegramOfficial.js";
 import {
@@ -433,7 +434,7 @@ async function processOfficialTelegramMessage(input: {
         fileName: audio.fileName,
         fileSize: audio.fileSize || null,
       });
-      const transcription = await transcribeTelegramAudio(process.env.TELEGRAM_BOT_TOKEN || "", audio);
+      const transcription = await transcribeTelegramAudio(getOfficialTelegramBotToken(), audio);
       console.info("[telegram:official] audio transcription completed", {
         updateId: update.update_id,
         characters: transcription.length,

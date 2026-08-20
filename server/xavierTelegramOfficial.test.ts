@@ -17,7 +17,7 @@ function emptyResponse(status = 204): Response {
 
 beforeAll(async () => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
-  process.env.TELEGRAM_BOT_TOKEN = "123456:test-token";
+  process.env.TELEGRAM_OFFICIAL_BOT_TOKEN = "123456:official-test-token";
   process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET = "official-test-secret";
   process.env.XAVIER_TELEGRAM_WEBHOOK_BASE_URL = "https://example.test/api/telegram/webhook";
   official = await import("./xavierTelegramOfficial.js");
@@ -32,6 +32,11 @@ describe("xavierTelegramOfficial", () => {
     expect(official.verifyOfficialTelegramWebhookSecret("official-test-secret")).toBe(true);
     expect(official.verifyOfficialTelegramWebhookSecret("wrong-secret")).toBe(false);
     expect(official.verifyOfficialTelegramWebhookSecret("")).toBe(false);
+  });
+
+  it("prioriza o token dedicado e não reutiliza o token legado", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "123456:legacy-token";
+    expect(official.getOfficialTelegramBotToken()).toBe("123456:official-test-token");
   });
 
   it("gera deep link com bot oficial, locale e expiração", async () => {

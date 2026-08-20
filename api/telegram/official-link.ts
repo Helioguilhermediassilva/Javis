@@ -17,6 +17,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     res.status(200).json({ mode: "official", ...link });
   } catch (error) {
     const authError = authErrorResponse(error);
-    res.status(authError?.status || 502).json({ error: authError?.message || "Não foi possível preparar a vinculação do Telegram." });
+    if (authError) {
+      res.status(authError.status).json({ error: authError.message });
+      return;
+    }
+    const message = error instanceof Error ? error.message : "";
+    const botConfigurationError = /TELEGRAM_OFFICIAL_BOT_TOKEN|Token do bot oficial Telegram inválido|bot inexistente/i.test(message);
+    res.status(botConfigurationError ? 503 : 502).json({
+      error: botConfigurationError
+        ? "O bot oficial do Telegram ainda não está configurado corretamente no servidor."
+        : "Não foi possível preparar a vinculação do Telegram.",
+    });
   }
 }

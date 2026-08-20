@@ -108,7 +108,7 @@ O Xavier pode ser utilizado pelo Telegram para texto, áudio, documentos e coman
 
 O canal oficial multiusuário utiliza a identidade pública do Xavier e vincula cada chat a uma conta por um código temporário de uso único, apresentado também como QR Code e deep link no cockpit. Memória, arquivos, CRM e limites de uso continuam isolados por `user_id`; o webhook sem `connection_id` atende o bot oficial, enquanto conexões individuais legadas permanecem compatíveis durante a transição.
 
-Para ativar o canal oficial no ambiente de produção, configure `TELEGRAM_BOT_TOKEN` e `TELEGRAM_OFFICIAL_WEBHOOK_SECRET` no projeto autorizado. O serviço aceita temporariamente `TELEGRAM_WEBHOOK_SECRET` como fallback do segundo valor, mas a configuração separada é recomendada. O webhook deve apontar para `https://jarvisnowgo.com/api/telegram/webhook` sem query string de conexão.
+Para ativar o canal oficial no ambiente de produção, configure `TELEGRAM_OFFICIAL_BOT_TOKEN` com o token do bot oficial dedicado e `TELEGRAM_OFFICIAL_WEBHOOK_SECRET` no projeto autorizado. Mantenha `TELEGRAM_BOT_TOKEN` reservado para compatibilidade com o fluxo legado e não substitua seu valor ao configurar o novo bot. O serviço aceita temporariamente `TELEGRAM_WEBHOOK_SECRET` como fallback do segredo oficial, mas a configuração separada é recomendada. Registre o webhook do bot oficial em `https://jarvisnowgo.com/api/telegram/webhook`, sem query string de conexão. Cada código vincula um único `telegram_chat_id` ao `user_id` da sessão; memória, arquivos, CRM e limites permanecem persistidos e isolados por usuário.
 
 ---
 
