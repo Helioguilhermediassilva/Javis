@@ -32,6 +32,7 @@ import {
   updateOfficialTelegramLocale,
   verifyOfficialTelegramWebhookSecret,
   getOfficialTelegramBotToken,
+  parseOfficialTelegramStartCommand,
   type OfficialTelegramLink,
 } from "../../server/xavierTelegramOfficial.js";
 import {
@@ -592,9 +593,9 @@ async function handleOfficialWebhook(req: VercelRequest, res: VercelResponse): P
   }
 
   const rawText = typeof message.text === "string" ? message.text.trim().slice(0, 4000) : "";
-  const startMatch = rawText.match(/^\/start(?:@[^\s]+)?(?:\s+(.+))?$/i);
-  if (startMatch) {
-    const code = startMatch[1]?.trim() || "";
+  const startCode = parseOfficialTelegramStartCommand(rawText);
+  if (startCode !== null) {
+    const code = startCode;
     if (!code) {
       await sendOfficialTelegramText(chatId, officialTelegramText("pt", "linkRequired")).catch((error) => console.error("[telegram:official] start instruction failed", (error as Error).message));
       json(res, 200, { ok: true, accepted: true, action: "link_required" });

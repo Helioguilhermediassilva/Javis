@@ -39,6 +39,13 @@ describe("xavierTelegramOfficial", () => {
     expect(official.getOfficialTelegramBotToken()).toBe("123456:official-test-token");
   });
 
+  it("extrai o código de deep links com e sem username do bot", () => {
+    expect(official.parseOfficialTelegramStartCommand("/start code_12345678901234567890")).toBe("code_12345678901234567890");
+    expect(official.parseOfficialTelegramStartCommand("/start@XavierOfficialBot code_12345678901234567890")).toBe("code_12345678901234567890");
+    expect(official.parseOfficialTelegramStartCommand("/start")).toBe("");
+    expect(official.parseOfficialTelegramStartCommand("olá")).toBeNull();
+  });
+
   it("gera deep link com bot oficial, locale e expiração", async () => {
     const fetchMock: FetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

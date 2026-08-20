@@ -55,6 +55,11 @@ export function getOfficialTelegramBotToken(): string {
   if (!token) throw new Error("TELEGRAM_OFFICIAL_BOT_TOKEN não configurado para o bot oficial");
   return token;
 }
+
+export function parseOfficialTelegramStartCommand(text: string): string | null {
+  const match = text.trim().slice(0, 4000).match(/^\/start(?:@[^\s]+)?(?:\s+(.+))?$/i);
+  return match ? (match[1]?.trim() || "") : null;
+}
 function officialWebhookSecret(): string {
   const secret = process.env.TELEGRAM_OFFICIAL_WEBHOOK_SECRET?.trim() || process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || "";
   if (!secret) throw new Error("TELEGRAM_OFFICIAL_WEBHOOK_SECRET não configurado para o bot oficial");
