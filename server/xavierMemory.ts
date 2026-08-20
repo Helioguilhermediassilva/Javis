@@ -9,6 +9,9 @@ export interface XavierProfile {
   memory_enabled: boolean;
   retention_days: number;
   monthly_message_limit: number;
+  plan?: "individual" | "pro" | "business" | null;
+  billing_status?: "inactive" | "trialing" | "active" | "past_due" | "canceled" | null;
+  entitlement_override?: Record<string, unknown> | null;
 }
 
 export interface XavierHistoryItem {
@@ -67,7 +70,7 @@ function monthStart(): string {
 
 export async function getXavierProfile(userId: string): Promise<XavierProfile> {
   const params = new URLSearchParams({
-    select: "id,display_name,memory_enabled,retention_days,monthly_message_limit",
+    select: "id,display_name,memory_enabled,retention_days,monthly_message_limit,plan,billing_status,entitlement_override",
     id: `eq.${userId}`,
     limit: "1",
   });
@@ -77,7 +80,7 @@ export async function getXavierProfile(userId: string): Promise<XavierProfile> {
   const response = await supabaseRequest(PROFILE_TABLE, {
     method: "POST",
     headers: { Prefer: "return=representation" },
-    body: JSON.stringify({ id: userId }),
+    body: JSON.stringify({ id: userId, plan: "individual", billing_status: "inactive", entitlement_override: {} }),
   });
   const created = await readRows<XavierProfile>(response, "profile insert");
   if (!created[0]) throw new Error("Perfil Xavier não foi criado");

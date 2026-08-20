@@ -2,6 +2,9 @@ import { useState, type FormEvent } from "react";
 import { BrainCircuit, Eye, EyeOff, KeyRound, Loader2, Mail, ShieldCheck, UserPlus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
+const NOWGO_SIGNUP_URL = "https://www.nowgoai.com/";
+const USE_EXTERNAL_SIGNUP = import.meta.env.VITE_NOWGO_EXTERNAL_SIGNUP !== "false";
+
 export default function Login() {
   const { signIn, signUp, configurationError } = useAuth();
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -68,7 +71,7 @@ export default function Login() {
           <div className="mb-8 flex items-center gap-3 lg:hidden"><BrainCircuit className="h-6 w-6 text-[#00d4ff]" /><span className="text-sm tracking-[0.3em]">XAVIER</span></div>
           <div className="mb-8 flex border-b border-[#0d3347] text-xs uppercase tracking-[0.2em]">
             <button type="button" onClick={() => switchMode("login")} className={`flex-1 border-b-2 pb-3 transition ${mode === "login" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}>Entrar</button>
-            <button type="button" onClick={() => switchMode("signup")} className={`flex-1 border-b-2 pb-3 transition ${mode === "signup" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}>Criar conta</button>
+            <button type="button" onClick={() => USE_EXTERNAL_SIGNUP ? window.location.assign(NOWGO_SIGNUP_URL) : switchMode("signup")} className={`flex-1 border-b-2 pb-3 transition ${mode === "signup" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}>Criar conta</button>
           </div>
 
           <div className="mb-7">

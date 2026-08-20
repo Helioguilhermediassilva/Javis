@@ -116,9 +116,9 @@ A migração deve ser gradual, preservando as conexões existentes até que o no
 
 O Javis não implementa cobrança diretamente nesta etapa. Checkout, planos, assinatura, portal do cliente e reconciliação serão centralizados no site e no ecossistema [NowGo AI](https://www.nowgoai.com/), mantendo o núcleo operacional independente das decisões comerciais.
 
-O cadastro futuro deverá começar pelo ambiente comercial NowGo AI e retornar ao Xavier por um contrato seguro de identidade. Antes de ativar esse fluxo, será necessário definir o modelo de autenticação compartilhada, o retorno autorizado e a sincronização de permissões.
+O botão de criação de conta do Xavier encaminha o usuário ao ambiente comercial NowGo AI, mantendo o login do Xavier disponível para usuários já habilitados. O retorno com identidade compartilhada, permissões e continuidade de sessão deverá seguir um contrato seguro entre os ambientes antes de ser considerado concluído.
 
-Até essa integração, o fluxo de autenticação existente do Xavier permanece como base operacional.
+O cadastro local permanece como fallback operacional controlado, enquanto o ecossistema NowGo AI consolida a experiência central de identidade e relacionamento com o cliente.
 
 ---
 
@@ -127,7 +127,7 @@ Até essa integração, o fluxo de autenticação existente do Xavier permanece 
 | Área | Estado |
 |---|---|
 | Cockpit Xavier | Operacional |
-| Autenticação individual | Operacional |
+| Login e autenticação individual | Operacional; cadastro comercial encaminhado ao NowGo AI |
 | Memória por usuário | Operacional |
 | Voz e interação por áudio | Operacional |
 | Telegram individual | Operacional |
@@ -136,7 +136,7 @@ Até essa integração, o fluxo de autenticação existente do Xavier permanece 
 | Observabilidade econômica | Fundação aplicada |
 | Bot Telegram oficial multiusuário | Próxima evolução |
 | Idiomas PT, EN e ES | Próxima evolução |
-| Entitlements por plano | Próxima evolução |
+| Fundação de entitlements por plano | Aplicada sem cobrança local |
 | Billing centralizado no NowGo AI | Planejado, fora do Javis nesta etapa |
 | Organizações, equipes e RBAC | Evolução posterior |
 
