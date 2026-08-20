@@ -535,6 +535,8 @@ export type MessageKey =
 
 function detectInitialLocale(): Locale {
   if (typeof window === "undefined") return "pt";
+  const requested = new URLSearchParams(window.location.search).get("locale");
+  if (requested === "pt" || requested === "en" || requested === "es") return requested;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored === "pt" || stored === "en" || stored === "es") return stored;
   const language = window.navigator.language.toLowerCase();

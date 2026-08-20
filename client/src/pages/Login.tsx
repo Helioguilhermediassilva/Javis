@@ -1,14 +1,18 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { BrainCircuit, Eye, EyeOff, KeyRound, Loader2, Mail, ShieldCheck, UserPlus } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { LanguageSelector, useLanguage } from "@/contexts/LanguageContext";
+import { LanguageSelector, useLanguage, type Locale } from "@/contexts/LanguageContext";
 
 const NOWGO_SIGNUP_URL = "https://www.nowgoai.com/";
 const USE_EXTERNAL_SIGNUP = import.meta.env.VITE_NOWGO_EXTERNAL_SIGNUP !== "false";
 
+function isLocale(value: string | null): value is Locale {
+  return value === "pt" || value === "en" || value === "es";
+}
+
 export default function Login() {
   const { signIn, signUp, configurationError } = useAuth();
-  const { t } = useLanguage();
+  const { locale, setLocale, t } = useLanguage();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
@@ -16,6 +20,13 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "error" | "success"; text: string } | null>(null);
+
+  useEffect(() => {
+    const requestedLocale = new URLSearchParams(window.location.search).get("locale");
+    if (isLocale(requestedLocale) && requestedLocale !== locale) {
+      setLocale(requestedLocale);
+    }
+  }, [locale, setLocale]);
 
   function switchMode(next: "login" | "signup") {
     setMode(next);
@@ -77,7 +88,22 @@ export default function Login() {
           <div className="mb-8 flex items-center gap-3 lg:hidden"><BrainCircuit className="h-6 w-6 text-[#00d4ff]" /><span className="text-sm tracking-[0.3em]">XAVIER</span></div>
           <div className="mb-8 flex border-b border-[#0d3347] text-xs uppercase tracking-[0.2em]">
             <button type="button" onClick={() => switchMode("login")} className={`flex-1 border-b-2 pb-3 transition ${mode === "login" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}>{t("login.signIn")}</button>
-            <button type="button" onClick={() => USE_EXTERNAL_SIGNUP ? window.location.assign(NOWGO_SIGNUP_URL) : switchMode("signup")} className={`flex-1 border-b-2 pb-3 transition ${mode === "signup" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}>{t("login.createAccount")}</button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!USE_EXTERNAL_SIGNUP) {
+                  switchMode("signup");
+                  return;
+                }
+                const signupUrl = new URL(NOWGO_SIGNUP_URL);
+                signupUrl.searchParams.set("locale", locale);
+                signupUrl.searchParams.set("source", "xavier");
+                window.location.assign(signupUrl.toString());
+              }}
+              className={`flex-1 border-b-2 pb-3 transition ${mode === "signup" ? "border-[#00d4ff] text-[#d8f8ff]" : "border-transparent text-[#3a8a9a] hover:text-[#8ffcff]"}`}
+            >
+              {t("login.createAccount")}
+            </button>
           </div>
 
           <div className="mb-7">
