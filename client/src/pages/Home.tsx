@@ -576,7 +576,7 @@ export default function Home() {
 
         {/* RIGHT PANEL */}
         <aside
-          className="flex flex-col shrink-0 overflow-hidden"
+          className="flex h-full min-h-0 flex-col shrink-0 overflow-hidden"
           style={{
             width: "340px",
             background: C.DARK,
@@ -634,7 +634,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="flex min-h-[190px] flex-[1.45] flex-col gap-1">
+          <section className="flex min-h-[220px] flex-[2.3] flex-col gap-1">
             <div className="shrink-0" style={{ height: "1px", background: C.BORDER, margin: "2px 0" }} />
             <div className="shrink-0 text-[7px] font-bold" style={{ color: C.TEXT_MED }}>
               ▸ {t("home.command")}
