@@ -38,6 +38,7 @@ function ProtectedMemorySettings() {
 function Router() {
   return (
     <Switch>
+      <Route path={"/login"} component={Login} />
       <Route path={"/"} component={ProtectedHome} />
       <Route path={"/telegram-connect"} component={ProtectedTelegramConnect} />
       <Route path={"/memory"} component={ProtectedMemorySettings} />
