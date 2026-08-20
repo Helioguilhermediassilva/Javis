@@ -60,7 +60,10 @@ export default function Login() {
               <BrainCircuit className="h-7 w-7" />
               {t("login.title")} / ACCESS NODE
             </div>
-            <h1 className="max-w-md text-4xl font-semibold leading-tight text-[#d8f8ff]">{t("login.eyebrow")} com memória sob seu controle.</h1>
+            <h1 className="max-w-md text-4xl font-semibold leading-tight text-[#d8f8ff]">
+              <span className="block">{t("login.heroLead")}</span>
+              <span className="mt-2 block text-2xl text-[#8ffcff]">{t("login.heroTagline")}</span>
+            </h1>
             <p className="mt-6 max-w-md text-sm leading-7 text-[#5ab8cc]">{t("login.subtitle")}. {t("telegram.description")}</p>
           </div>
           <div className="grid gap-3 text-xs text-[#3a8a9a]">

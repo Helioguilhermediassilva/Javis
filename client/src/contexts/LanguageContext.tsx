@@ -26,6 +26,8 @@ const messages = {
     },
     login: {
       eyebrow: "INTELIGÊNCIA SOBERANA",
+      heroLead: "Seu cérebro pessoal de Inteligência Soberana.",
+      heroTagline: "Sua inteligência. Sua memória. Seu controle.",
       title: "XAVIER",
       subtitle: "Sistema inteligente operacional da NowGo AI",
       signIn: "Entrar",
@@ -140,6 +142,8 @@ const messages = {
     },
     login: {
       eyebrow: "SOVEREIGN INTELLIGENCE",
+      heroLead: "Your personal brain of Sovereign Intelligence.",
+      heroTagline: "Your intelligence. Your memory. Your control.",
       title: "XAVIER",
       subtitle: "NowGo AI operational intelligence system",
       signIn: "Sign in",
@@ -254,6 +258,8 @@ const messages = {
     },
     login: {
       eyebrow: "INTELIGENCIA SOBERANA",
+      heroLead: "Tu cerebro personal de Inteligencia Soberana.",
+      heroTagline: "Tu inteligencia. Tu memoria. Tu control.",
       title: "XAVIER",
       subtitle: "Sistema inteligente operacional de NowGo AI",
       signIn: "Entrar",
