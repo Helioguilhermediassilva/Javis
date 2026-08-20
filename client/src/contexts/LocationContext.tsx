@@ -1,4 +1,5 @@
 import {
+  configure,
   getAllCitiesOfCountry,
   getCitiesOfState,
   getCountries,
@@ -7,6 +8,8 @@ import {
   type ICountry,
   type IState,
 } from "@countrystatecity/countries-browser";
+import { FALLBACK_BRAZIL_STATES, FALLBACK_BRASILIA_CITIES } from "@/data/brazilLocationFallback";
+import { FALLBACK_COUNTRIES } from "@/data/countriesFallback";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export interface XavierLocation {
@@ -25,6 +28,10 @@ export interface LocationSelection {
 export type LocationLoadingLevel = "countries" | "states" | "cities" | null;
 
 const STORAGE_KEY = "xavier-location";
+const FALLBACK_COUNTRIES_AS_LIBRARY = FALLBACK_COUNTRIES as unknown as ICountry[];
+
+// Aumenta o orçamento do CDN; os fallbacks locais garantem a inicialização mesmo em caso de falha.
+configure({ timeout: 15000 });
 
 export const DEFAULT_LOCATION: XavierLocation = {
   country: "Brasil",
@@ -123,10 +130,10 @@ const LocationContext = createContext<LocationContextValue | null>(null);
 
 export function LocationProvider({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<LocationSelection>(readInitialSelection);
-  const [countries, setCountries] = useState<ICountry[]>([]);
-  const [states, setStates] = useState<IState[]>([]);
-  const [statesLoadedForCountry, setStatesLoadedForCountry] = useState<string | null>(null);
-  const [cities, setCities] = useState<ICity[]>([]);
+  const [countries, setCountries] = useState<ICountry[]>(() => sortByName(FALLBACK_COUNTRIES_AS_LIBRARY));
+  const [states, setStates] = useState<IState[]>(() => selection.countryCode === "BR" ? sortByName(FALLBACK_BRAZIL_STATES) : []);
+  const [statesLoadedForCountry, setStatesLoadedForCountry] = useState<string | null>(() => selection.countryCode === "BR" ? "BR" : null);
+  const [cities, setCities] = useState<ICity[]>(() => selection.countryCode === "BR" && selection.stateCode === "DF" ? sortByName(FALLBACK_BRASILIA_CITIES) : []);
   const [loading, setLoading] = useState<LocationLoadingLevel>("countries");
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -144,33 +151,35 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     setLoading("countries");
     setError(null);
-    getCountries()
-      .then((nextCountries) => {
-        if (cancelled) return;
-        const ordered = sortByName(nextCountries);
-        setCountries(ordered);
-        setSelection((current) => {
-          const country = findCountry(ordered, current);
-          if (!country) {
-            return {
-              ...current,
-              countryCode: "",
-              stateCode: "",
-              cityId: null,
-              location: { ...current.location, state: "", city: "" },
-            };
-          }
+    const applyCountries = (nextCountries: ICountry[]) => {
+      if (cancelled) return;
+      const ordered = sortByName(nextCountries);
+      setCountries(ordered);
+      setSelection((current) => {
+        const country = findCountry(ordered, current);
+        if (!country) {
           return {
             ...current,
-            countryCode: country.iso2,
-            location: { ...current.location, country: current.location.country || country.name },
+            countryCode: "",
+            stateCode: "",
+            cityId: null,
+            location: { ...current.location, state: "", city: "" },
           };
-        });
-      })
+        }
+        return {
+          ...current,
+          countryCode: country.iso2,
+          location: { ...current.location, country: current.location.country || country.name },
+        };
+      });
+    };
+    getCountries()
+      .then(applyCountries)
       .catch((loadError: unknown) => {
         if (!cancelled) {
-          console.error("[location] countries catalog failed", loadError);
-          setError("countries");
+          console.warn("[location] countries catalog failed; using local fallback", loadError);
+          setError(null);
+          applyCountries(FALLBACK_COUNTRIES_AS_LIBRARY);
         }
       })
       .finally(() => {
@@ -188,17 +197,19 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     setLoading("states");
     setError(null);
-    setStates([]);
-    setStatesLoadedForCountry(null);
-    setCities([]);
+    const fallbackStates = selection.countryCode === "BR" ? sortByName(FALLBACK_BRAZIL_STATES) : [];
+    setStates(fallbackStates);
+    setStatesLoadedForCountry(selection.countryCode);
+    setCities(selection.countryCode === "BR" && selection.stateCode === "DF" ? sortByName(FALLBACK_BRASILIA_CITIES) : []);
     getStatesOfCountry(selection.countryCode)
       .then((nextStates) => {
         if (cancelled) return;
         const ordered = sortByName(nextStates);
-        setStates(ordered);
+        const resolvedStates = ordered.length > 0 ? ordered : fallbackStates;
+        setStates(resolvedStates);
         setStatesLoadedForCountry(selection.countryCode);
         setSelection((current) => {
-          const state = findState(ordered, current);
+          const state = findState(resolvedStates, current);
           if (!state) {
             return {
               ...current,
@@ -216,8 +227,13 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       })
       .catch((loadError: unknown) => {
         if (!cancelled) {
-          console.error("[location] states catalog failed", loadError);
-          setError("states");
+          if (fallbackStates.length > 0) {
+            console.warn("[location] states catalog failed; using local Brazil fallback", loadError);
+            setError(null);
+          } else {
+            console.error("[location] states catalog failed", loadError);
+            setError("states");
+          }
         }
       })
       .finally(() => {
@@ -242,9 +258,11 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       .then((nextCities) => {
         if (cancelled) return;
         const ordered = sortByName(nextCities);
-        setCities(ordered);
+        const fallbackCities = selection.countryCode === "BR" && selection.stateCode === "DF" ? sortByName(FALLBACK_BRASILIA_CITIES) : [];
+        const resolvedCities = ordered.length > 0 ? ordered : fallbackCities;
+        setCities(resolvedCities);
         setSelection((current) => {
-          const city = findCity(ordered, current);
+          const city = findCity(resolvedCities, current);
           if (!city) {
             return { ...current, cityId: null, location: { ...current.location, city: "" } };
           }
@@ -257,8 +275,13 @@ export function LocationProvider({ children }: { children: ReactNode }) {
       })
       .catch((loadError: unknown) => {
         if (!cancelled) {
-          console.error("[location] cities catalog failed", loadError);
-          setError("cities");
+          if (selection.countryCode === "BR" && selection.stateCode === "DF") {
+            console.warn("[location] cities catalog failed; using local Brasília fallback", loadError);
+            setError(null);
+          } else {
+            console.error("[location] cities catalog failed", loadError);
+            setError("cities");
+          }
         }
       })
       .finally(() => {

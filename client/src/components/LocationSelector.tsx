@@ -25,8 +25,8 @@ export default function LocationSelector() {
   } = useLocation();
 
   const countriesLoading = loading === "countries" && countries.length === 0;
-  const statesLoading = loading === "states";
-  const citiesLoading = loading === "cities";
+  const statesLoading = loading === "states" && states.length === 0;
+  const citiesLoading = loading === "cities" && cities.length === 0;
   const hasStateLevel = states.length > 0;
   const stateDisabled = !countryCode || statesLoading || Boolean(error === "states") || (statesReady && !hasStateLevel);
   const cityDisabled = (!stateCode && hasStateLevel) || !countryCode || citiesLoading || Boolean(error === "cities");
