@@ -14,6 +14,7 @@ import DfBriefingPanel from "@/components/DfBriefingPanel";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { redirectToNowGoHome } from "@/lib/nowgoRedirect";
 import { useLocation } from "@/contexts/LocationContext";
 import LocationSelector from "@/components/LocationSelector";
 
@@ -478,7 +479,7 @@ export default function Home() {
             <Link href="/telegram-connect" className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_MED }}>
               {t("home.telegram")}
             </Link>
-            <button type="button" onClick={() => void signOut()} className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_DIM }} title={user?.email || t("home.closeSession")}>
+            <button type="button" onClick={() => void (async () => { await signOut(); redirectToNowGoHome(locale); })()} className="border px-2 py-1 text-[7px] tracking-wider transition hover:brightness-125" style={{ borderColor: C.BORDER, color: C.TEXT_DIM }} title={user?.email || t("home.closeSession")}>
               {t("common.logout")}
             </button>
           </div>

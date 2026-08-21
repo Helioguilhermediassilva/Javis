@@ -17,6 +17,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 function clearAuthCallbackUrl() {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
+  if (url.pathname === "/auth/handoff-callback") return;
   const searchKeys = ["code", "type", "access_token", "refresh_token", "expires_in", "expires_at", "token_type", "error", "error_code", "error_description"];
   let changed = false;
   for (const key of searchKeys) {

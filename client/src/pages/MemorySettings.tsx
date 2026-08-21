@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Brain, CheckCircle2, Loader2, LogOut, Save, ShieldCheck, Trash2, AlertTriangle } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { redirectToNowGoHome } from "@/lib/nowgoRedirect";
 import { xavierApi } from "@/lib/xavierApi";
 
 interface MemoryProfile {
@@ -27,6 +29,7 @@ interface MemoryResponse {
 export default function MemorySettings() {
   const [, navigate] = useLocation();
   const { user, signOut } = useAuth();
+  const { locale } = useLanguage();
   const [profile, setProfile] = useState<MemoryProfile | null>(null);
   const [summaries, setSummaries] = useState<MemorySummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,7 +88,7 @@ export default function MemorySettings() {
 
   async function logout() {
     await signOut();
-    navigate("/");
+    redirectToNowGoHome(locale);
   }
 
   return (

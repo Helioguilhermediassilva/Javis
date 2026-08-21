@@ -18,6 +18,7 @@ import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { LanguageSelector, useLanguage } from "@/contexts/LanguageContext";
 import { xavierApi } from "@/lib/xavierApi";
+import { redirectToNowGoHome } from "@/lib/nowgoRedirect";
 
 interface TelegramConnection {
   id: string;
@@ -148,7 +149,7 @@ export default function TelegramConnect() {
 
   async function logout() {
     await signOut();
-    navigate("/");
+    redirectToNowGoHome(locale);
   }
 
   const botChatUrl = status?.connection?.bot_chat_url

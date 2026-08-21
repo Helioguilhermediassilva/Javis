@@ -13,6 +13,7 @@ import Login from "./pages/Login";
 import TelegramConnect from "./pages/TelegramConnect";
 import MemorySettings from "./pages/MemorySettings";
 import EmailConfirmed from "./pages/EmailConfirmed";
+import AuthHandoff from "./pages/AuthHandoff";
 
 function AuthenticatedRoute({ children }: { children: React.ReactNode }) {
   const { loading, user } = useAuth();
@@ -43,6 +44,7 @@ function Router() {
       <Route path={"/telegram-connect"} component={ProtectedTelegramConnect} />
       <Route path={"/memory"} component={ProtectedMemorySettings} />
       <Route path={"/email-confirmed"} component={EmailConfirmed} />
+      <Route path={"/auth/handoff-callback"} component={AuthHandoff} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
