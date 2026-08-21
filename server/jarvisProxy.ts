@@ -21,6 +21,7 @@ import {
   type XavierConversation,
 } from "./xavierMemory.js";
 import { isPdfTaskRequest } from "./xavierManus.js";
+import { isPresentationTaskRequest } from "./xavierArtifacts.js";
 import {
   appendClaudeCitations,
   generateClaudeReply,
@@ -37,8 +38,21 @@ import {
   type XavierFileRecord,
 } from "./xavierFiles.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
+import { createXavierPresentationAttachment, type XavierGeneratedPresentationAttachment } from "./xavierPresentation.js";
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
+import {
+  actionReadyMessage,
+  approvalPrompt,
+  approveXavierActionRequest,
+  cancelXavierActionRequest,
+  classifyXavierTaskRequest,
+  createXavierActionRequest,
+  isXavierApprovalCommand,
+  isXavierCancellationCommand,
+  approvalReference,
+  executeApprovedXavierActionRequest,
+} from "./xavierTaskOrchestrator.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional da NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
 
@@ -682,6 +696,51 @@ async function buildLocalPdfResult(input: {
   };
 }
 
+async function createLocalXavierPresentation(input: {
+  userId: string;
+  taskId: string;
+  requestText: string;
+  history: ChatMessage[];
+}): Promise<XavierGeneratedPresentationAttachment> {
+  const presentationPrompt = `Crie uma apresentação profissional e editável em português. Responda estritamente em Markdown: comece com '# título geral'; depois, para cada slide, use '## Slide N: título curto' seguido por 2 a 4 bullets concisos. Inclua capa, contexto, pontos principais, recomendações e próximos passos quando fizer sentido. Não escreva texto fora dessa estrutura e não diga que não pode gerar arquivos. Pedido original: ${input.requestText}`;
+  let outline: string;
+  if (isClaudeConfigured()) {
+    const result = await generateClaudeReply({
+      history: input.history,
+      systemPrompt: JARVIS_SYSTEM_PROMPT,
+      userMessage: presentationPrompt,
+      useWebSearch: false,
+      maxTokens: 8_000,
+    });
+    outline = result.reply;
+  } else {
+    outline = (await generateJarvisReply({
+      history: input.history,
+      userMessage: presentationPrompt,
+      honorific: "senhor",
+    })).reply;
+  }
+  return createXavierPresentationAttachment({
+    userId: input.userId,
+    taskId: input.taskId,
+    title: "Apresentação solicitada ao Xavier",
+    outline,
+  });
+}
+
+async function buildLocalPresentationResult(input: {
+  userId: string;
+  taskId: string;
+  requestText: string;
+  history: ChatMessage[];
+}): Promise<{ reply: string; attachment: XavierGeneratedPresentationAttachment }> {
+  const attachment = await createLocalXavierPresentation(input);
+  return {
+    reply: `Preparei a apresentação solicitada, senhor. O arquivo está disponível no painel: ${attachment.file_name}`,
+    attachment,
+  };
+}
+
 function persistedUserContent(payload: ChatPayload): string {
   const text = (payload.userMessage || "").toString().trim();
   const attachmentNames = (payload.attachments || [])
@@ -799,12 +858,99 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         content: persistedUserContent(authenticatedPayload),
       });
     }
+    const requestedEngine = authenticatedPayload.engine || "auto";
+    const actionReference = approvalReference(authenticatedPayload.userMessage || "");
+    if (isXavierApprovalCommand(authenticatedPayload.userMessage || "") || isXavierCancellationCommand(authenticatedPayload.userMessage || "")) {
+      const action = isXavierApprovalCommand(authenticatedPayload.userMessage || "")
+        ? await approveXavierActionRequest(context.userId, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+        : await cancelXavierActionRequest(context.userId, actionReference);
+      const reply = action
+        ? actionReadyMessage(action)
+        : "Não encontrei uma solicitação pendente para esse código nesta sessão. Verifique o código e tente novamente, senhor.";
+      if (context.persist) {
+        await appendXavierMessage({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          channel: "web",
+          role: "assistant",
+          content: reply,
+        });
+      }
+      sendJson(res, 200, {
+        reply,
+        tools_used: [],
+        timings: [],
+        executor: "approval",
+        approval_required: false,
+        action_id: action?.id || null,
+        action_status: action?.status || null,
+        attachments: action?.attachments || [],
+      });
+      return;
+    }
+    const taskIntent = classifyXavierTaskRequest(authenticatedPayload.userMessage || "");
+    if (taskIntent?.requiresApproval) {
+      const action = await createXavierActionRequest({
+        userId: context.userId,
+        channel: "web",
+        conversationId: context.conversation.id,
+        requestText: authenticatedPayload.userMessage || "",
+        intent: taskIntent,
+        metadata: { requested_engine: requestedEngine, locale: normalizeSentimentLocale(authenticatedPayload.locale) },
+      });
+      const reply = approvalPrompt(action);
+      if (context.persist) {
+        await appendXavierMessage({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          channel: "web",
+          role: "assistant",
+          content: reply,
+        });
+      }
+      sendJson(res, 200, {
+        reply,
+        tools_used: [],
+        timings: [],
+        executor: "approval",
+        approval_required: true,
+        action_id: action.id,
+        action_kind: action.kind,
+        action_status: action.status,
+        approval_code: action.approval_code,
+      });
+      return;
+    }
     const activeFile = await resolveActiveXavierFile(authenticatedPayload, context);
     const fileEditRequested = Boolean(activeFile && isFileEditRequest(authenticatedPayload.userMessage || "", true));
-    const requestedEngine = authenticatedPayload.engine || "auto";
-    const claudeTask = shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine) || fileEditRequested;
+    const claudeTask = fileEditRequested || (requestedEngine !== "grok" && (isClaudeConfigured() || shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine)));
     if (claudeTask && (requestedEngine === "claude" || requestedEngine === "manus") && !isClaudeConfigured()) {
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
+    }
+    if (context.persist && isPresentationTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
+      const { reply, attachment } = await buildLocalPresentationResult({
+        userId: context.userId,
+        taskId: `web-${context.conversation.id}-${Date.now()}`,
+        requestText: authenticatedPayload.userMessage || "",
+        history: context.history,
+      });
+      await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+      await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+        console.warn("[xavier-memory] local presentation maintenance failed", (error as Error).message);
+      });
+      recordXavierUsageEventDetached({
+        userId: telemetryUserId,
+        requestId,
+        channel: "web",
+        eventName: "artifact_presentation",
+        status: "success",
+        provider: "local",
+        model: "pptxgenjs",
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_json" },
+      });
+      sendJson(res, 200, { reply, tools_used: ["pptxgenjs.local"], timings: [], attachments: [attachment], local_presentation: true });
+      return;
     }
     if (claudeTask && isClaudeConfigured() && (!isPdfTaskRequest(authenticatedPayload.userMessage || "") || fileEditRequested)) {
       const result = await generateClaudeReply({
@@ -1156,11 +1302,81 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   const cleanup = () => clearInterval(heartbeat);
   req.on("close", cleanup);
 
-  const claudeTask = shouldUseClaudeTask(userMessage, payload.engine || "auto") || fileEditRequested;
-  if (claudeTask && (isClaudeConfigured() || payload.engine === "claude" || payload.engine === "manus")) {
+  const requestedEngine = payload.engine || "auto";
+  const actionReference = approvalReference(userMessage);
+  if (isXavierApprovalCommand(userMessage) || isXavierCancellationCommand(userMessage)) {
+    const action = isXavierApprovalCommand(userMessage)
+      ? await approveXavierActionRequest(context.userId, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+      : await cancelXavierActionRequest(context.userId, actionReference);
+    const reply = action
+      ? actionReadyMessage(action)
+      : "Não encontrei uma solicitação pendente para esse código nesta sessão. Verifique o código e tente novamente, senhor.";
+    if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+    for (const attachment of action?.attachments || []) {
+      sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
+    }
+    sseWrite(res, { type: "delta", text: reply });
+    sseWrite(res, { type: "done", reply, tools_used: [], executor: "approval", approval_required: false, action_id: action?.id || null, action_status: action?.status || null, attachments: action?.attachments || [] });
+    cleanup();
+    try { res.end(); } catch {}
+    return;
+  }
+  const taskIntent = classifyXavierTaskRequest(userMessage);
+  if (taskIntent?.requiresApproval) {
+    const action = await createXavierActionRequest({
+      userId: context.userId,
+      channel: "web",
+      conversationId: context.conversation.id,
+      requestText: userMessage,
+      intent: taskIntent,
+      metadata: { requested_engine: requestedEngine, locale },
+    });
+    const reply = approvalPrompt(action);
+    if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+    sseWrite(res, { type: "delta", text: reply });
+    sseWrite(res, { type: "done", reply, tools_used: [], executor: "approval", approval_required: true, action_id: action.id, action_kind: action.kind, action_status: action.status, approval_code: action.approval_code });
+    cleanup();
+    try { res.end(); } catch {}
+    return;
+  }
+  const claudeTask = fileEditRequested || (requestedEngine !== "grok" && (isClaudeConfigured() || shouldUseClaudeTask(userMessage, requestedEngine)));
+  if (claudeTask && (isClaudeConfigured() || requestedEngine === "claude" || requestedEngine === "manus")) {
     try {
       if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
-      if (isPdfTaskRequest(userMessage)) {
+      if (isPresentationTaskRequest(userMessage)) {
+        const { reply, attachment } = await buildLocalPresentationResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: userMessage,
+          history,
+        });
+        if (context.persist) {
+          await appendXavierMessage({
+            userId: context.userId,
+            conversationId: context.conversation.id,
+            channel: "web",
+            role: "assistant",
+            content: reply,
+          });
+          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+            console.warn("[xavier-memory] Claude presentation maintenance failed", (error as Error).message);
+          });
+        }
+        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
+        sseWrite(res, { type: "delta", text: reply });
+        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pptxgenjs.local"], executor: "claude", local_presentation: true });
+        recordXavierUsageEventDetached({
+          userId: context.persist ? context.userId : null,
+          requestId,
+          channel: "web",
+          eventName: "artifact_presentation",
+          status: "success",
+          provider: "local",
+          model: "pptxgenjs",
+          latencyMs: Date.now() - startedAt,
+          metadata: { route: "chat_stream", executor: "claude" },
+        });
+      } else if (isPdfTaskRequest(userMessage)) {
         const { reply, attachment } = await buildLocalPdfResult({
           userId: context.userId,
           taskId: `web-${context.conversation.id}-${Date.now()}`,

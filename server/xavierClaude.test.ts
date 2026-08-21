@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendClaudeCitations,
+  generateClaudeReply,
   isClaudeConfigured,
   shouldUseClaudeTask,
 } from "./xavierClaude";
@@ -8,6 +9,7 @@ import {
 afterEach(() => {
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_MODEL;
+  vi.unstubAllGlobals();
 });
 
 describe("Xavier Claude router", () => {
@@ -42,9 +44,27 @@ describe("Xavier Claude router", () => {
     expect(isClaudeConfigured()).toBe(true);
   });
 
+  it("faz fallback após recusa HTTP 200 do Fable", async () => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    process.env.ANTHROPIC_MODEL = "claude-fable-5";
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ type: "message", stop_reason: "refusal", content: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ type: "message", stop_reason: "end_turn", content: [{ type: "text", text: "Resposta segura." }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await generateClaudeReply({
+      userMessage: "Faça uma tarefa segura",
+      systemPrompt: "Responda de forma segura.",
+      timeoutMs: 5_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.model).toBe("claude-opus-5");
+    expect(result.reply).toBe("Resposta segura.");
+  });
+
   it("anexa fontes sem duplicar a resposta quando não há citações", () => {
     expect(appendClaudeCitations("Resposta", [])).toBe("Resposta");
     expect(appendClaudeCitations("Resposta", [{ title: "Fonte", url: "https://example.com" }])).toContain("https://example.com");
   });
 });
-

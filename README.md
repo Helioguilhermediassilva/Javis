@@ -110,6 +110,14 @@ O canal oficial multiusuário utiliza a identidade pública do Xavier e vincula 
 
 Para ativar o canal oficial no ambiente de produção, configure `TELEGRAM_OFFICIAL_BOT_TOKEN` com o token do bot oficial dedicado e `TELEGRAM_OFFICIAL_WEBHOOK_SECRET` no projeto autorizado. Mantenha `TELEGRAM_BOT_TOKEN` reservado para compatibilidade com o fluxo legado e não substitua seu valor ao configurar o novo bot. O serviço aceita temporariamente `TELEGRAM_WEBHOOK_SECRET` como fallback do segredo oficial, mas a configuração separada é recomendada. Registre o webhook do bot oficial em `https://jarvisnowgo.com/api/telegram/webhook`, sem query string de conexão. Cada código vincula um único `telegram_chat_id` ao `user_id` da sessão; memória, arquivos, CRM e limites permanecem persistidos e isolados por usuário.
 
+### Claude, voz e ações externas
+
+O executor conversacional utiliza `claude-fable-5` como modelo padrão por meio de `ANTHROPIC_MODEL`, com `claude-opus-5` como fallback opcional somente quando a API rejeitar o identificador principal. O valor pode ser substituído por um identificador autorizado pela chave Anthropic do ambiente, sem alterar o histórico ou a memória de nenhuma conta.
+
+Mensagens de voz do Telegram são transcritas antes de chegar ao mesmo contexto Claude da sessão. Quando `ELEVENLABS_API_KEY` está configurada, respostas a mensagens de voz também podem ser entregues como áudio pela voz Xavier; o comportamento pode ser desativado com `TELEGRAM_VOICE_REPLY_ENABLED=false`. A resposta textual continua sendo enviada mesmo que a síntese de voz falhe.
+
+Solicitações que possam conectar MCP, chamar sistemas externos, publicar, enviar, excluir, agendar ou gerar custos não são executadas silenciosamente. O Xavier cria uma solicitação privada na fila de ações e pede um código de aprovação explícita. O usuário pode responder `aprovar XAV-XXXXXXXX` ou `cancelar XAV-XXXXXXXX`; o código só é válido dentro da conta correspondente. PDFs e apresentações locais continuam podendo ser gerados diretamente, enquanto integrações externas dependem de um provedor autorizado e configurado no ambiente.
+
 ---
 
 ## Decisões comerciais
@@ -135,6 +143,9 @@ O cadastro local permanece como fallback operacional controlado, enquanto o ecos
 | CRM invisível | Operacional |
 | Observabilidade econômica | Fundação aplicada |
 | Bot Telegram oficial multiusuário | Operacional; vínculo por código único e QR Code |
+| Claude Fable no web e Telegram | Integrado com fallback configurável |
+| Voz de entrada e resposta no Telegram | Integrada; retorno vocal opcional por variável de ambiente |
+| Aprovação de ações externas | Integrada; fila persistente e isolada por usuário |
 | Idiomas PT, EN e ES | Operacional no login e cockpit |
 | Fundação de entitlements por plano | Aplicada sem cobrança local |
 | Billing centralizado no NowGo AI | Planejado, fora do Javis nesta etapa |

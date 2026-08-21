@@ -13,6 +13,19 @@ import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
 import { getTelegramClaudeTimeoutMs, isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
 import { handleXavierCrmRequest } from "../../server/xavierCrmAgent.js";
+import { sendXavierTelegramVoiceReply } from "../../server/xavierTelegramVoice.js";
+import {
+  actionReadyMessage,
+  approvalPrompt,
+  approveXavierActionRequest,
+  cancelXavierActionRequest,
+  classifyXavierTaskRequest,
+  createXavierActionRequest,
+  isXavierApprovalCommand,
+  isXavierCancellationCommand,
+  approvalReference,
+  executeApprovedXavierActionRequest,
+} from "../../server/xavierTaskOrchestrator.js";
 import {
   decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
@@ -173,6 +186,36 @@ async function createLocalXavierPresentation(input: {
 
 type XavierTelegramConnection = NonNullable<Awaited<ReturnType<typeof getStoredXavierTelegramConnection>>>;
 
+async function sendLinkedVoiceReplyIfNeeded(input: { token: string; chatId: string; hasAudio: boolean; text: string }): Promise<void> {
+  if (!input.hasAudio) return;
+  await sendXavierTelegramVoiceReply({ botToken: input.token, chatId: input.chatId, text: input.text }).catch((error) => {
+    console.warn("[telegram:xavier] voice reply failed", (error as Error).message);
+  });
+}
+
+async function sendOfficialVoiceReplyIfNeeded(input: { chatId: string; hasAudio: boolean; text: string; locale: OfficialTelegramLocale }): Promise<void> {
+  if (!input.hasAudio) return;
+  await sendXavierTelegramVoiceReply({ botToken: getOfficialTelegramBotToken(), chatId: input.chatId, text: input.text, locale: input.locale }).catch((error) => {
+    console.warn("[telegram:official] voice reply failed", (error as Error).message);
+  });
+}
+
+async function sendLinkedActionAttachments(connection: XavierTelegramConnection, chatId: string, attachments: Array<{ file_name: string; url: string }>): Promise<void> {
+  for (const attachment of attachments.slice(0, 8)) {
+    await sendXavierTelegramDocument(connection, chatId, attachment.url, `Resultado autorizado: ${attachment.file_name}`).catch((error) => {
+      console.warn("[telegram:xavier] approved attachment delivery failed", (error as Error).message);
+    });
+  }
+}
+
+async function sendOfficialActionAttachments(chatId: string, attachments: Array<{ file_name: string; url: string }>): Promise<void> {
+  for (const attachment of attachments.slice(0, 8)) {
+    await sendOfficialTelegramDocument(chatId, attachment.url, `Resultado autorizado: ${attachment.file_name}`, attachment.file_name).catch((error) => {
+      console.warn("[telegram:official] approved attachment delivery failed", (error as Error).message);
+    });
+  }
+}
+
 async function processPerUserTelegramMessage(input: {
   connection: XavierTelegramConnection;
   update: TelegramUpdate;
@@ -236,6 +279,53 @@ async function processPerUserTelegramMessage(input: {
     });
     if (!inserted) return;
 
+    const actionReference = approvalReference(text);
+    if (isXavierApprovalCommand(text) || isXavierCancellationCommand(text)) {
+      const action = isXavierApprovalCommand(text)
+        ? await approveXavierActionRequest(connection.user_id, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+        : await cancelXavierActionRequest(connection.user_id, actionReference);
+      const reply = action
+        ? actionReadyMessage(action)
+        : "Não encontrei uma solicitação pendente para esse código nesta sessão. Verifique o código e tente novamente, senhor.";
+      await appendXavierMessage({
+        userId: connection.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: reply,
+        telegramMessageId: message.message_id,
+      });
+      await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendLinkedActionAttachments(connection, chatId, action?.attachments || []);
+      await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
+      return;
+    }
+    const taskIntent = classifyXavierTaskRequest(text);
+    if (taskIntent?.requiresApproval) {
+      const action = await createXavierActionRequest({
+        userId: connection.user_id,
+        channel: "telegram",
+        conversationId: conversation.id,
+        telegramConnectionId: connection.id,
+        telegramChatId: chatId,
+        requestText: text,
+        intent: taskIntent,
+        metadata: { has_audio: Boolean(audio), bot_mode: "linked" },
+      });
+      const reply = approvalPrompt(action);
+      await appendXavierMessage({
+        userId: connection.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: reply,
+        telegramMessageId: message.message_id,
+      });
+      await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
+      return;
+    }
+
     const crmResult = await handleXavierCrmRequest(connection.user_id, text);
     if (crmResult.handled) {
       const reply = crmResult.reply || "Registro CRM processado.";
@@ -256,6 +346,7 @@ async function processPerUserTelegramMessage(input: {
         console.warn("[xavier-memory] Telegram CRM maintenance failed", (error as Error).message);
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
       return;
     }
 
@@ -303,6 +394,7 @@ async function processPerUserTelegramMessage(input: {
         console.warn("[xavier-memory] Telegram artifact maintenance failed", (error as Error).message);
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
       await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
       return;
     }
@@ -327,6 +419,7 @@ async function processPerUserTelegramMessage(input: {
       console.warn("[xavier-memory] Telegram Claude maintenance failed", (error as Error).message);
     });
     await sendXavierTelegramMessage(connection, chatId, reply);
+    await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
   } catch (error) {
     const messageText = (error as Error).message;
     console.error("[telegram:xavier] async webhook error", { connectionId: connection.id, updateId: update.update_id, error: messageText });
@@ -493,6 +586,52 @@ async function processOfficialTelegramMessage(input: {
     });
     if (!inserted) return;
 
+    const actionReference = approvalReference(text);
+    if (isXavierApprovalCommand(text) || isXavierCancellationCommand(text)) {
+      const action = isXavierApprovalCommand(text)
+        ? await approveXavierActionRequest(link.user_id, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+        : await cancelXavierActionRequest(link.user_id, actionReference);
+      const reply = action
+        ? actionReadyMessage(action)
+        : officialTelegramText(locale, "temporaryFailure");
+      await appendXavierMessage({
+        userId: link.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: reply,
+        telegramMessageId: message.message_id,
+      });
+      await sendOfficialTelegramText(chatId, reply);
+      await sendOfficialActionAttachments(chatId, action?.attachments || []);
+      await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
+      return;
+    }
+    const taskIntent = classifyXavierTaskRequest(text);
+    if (taskIntent?.requiresApproval) {
+      const action = await createXavierActionRequest({
+        userId: link.user_id,
+        channel: "telegram",
+        conversationId: conversation.id,
+        telegramChatId: chatId,
+        requestText: text,
+        intent: taskIntent,
+        metadata: { has_audio: Boolean(audio), bot_mode: "official", locale },
+      });
+      const reply = approvalPrompt(action);
+      await appendXavierMessage({
+        userId: link.user_id,
+        conversationId: conversation.id,
+        channel: "telegram",
+        role: "assistant",
+        content: reply,
+        telegramMessageId: message.message_id,
+      });
+      await sendOfficialTelegramText(chatId, reply);
+      await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
+      return;
+    }
+
     const crmResult = await handleXavierCrmRequest(link.user_id, text);
     if (crmResult.handled) {
       const reply = crmResult.reply || officialTelegramText(locale, "crmFallback");
@@ -514,6 +653,7 @@ async function processOfficialTelegramMessage(input: {
         console.warn("[xavier-memory] Official Telegram CRM maintenance failed", (error as Error).message);
       });
       await sendOfficialTelegramText(chatId, reply);
+      await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
       return;
     }
 
@@ -570,6 +710,7 @@ async function processOfficialTelegramMessage(input: {
         console.warn("[xavier-memory] Official Telegram artifact maintenance failed", (error as Error).message);
       });
       await sendOfficialTelegramText(chatId, reply);
+      await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
       await sendOfficialTelegramDocument(chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
       return;
     }
@@ -594,6 +735,7 @@ async function processOfficialTelegramMessage(input: {
       console.warn("[xavier-memory] Official Telegram Claude maintenance failed", (error as Error).message);
     });
     await sendOfficialTelegramText(chatId, reply);
+    await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error("[telegram:official] async webhook error", { userId: link.user_id, updateId: update.update_id, error: errorMessage });
