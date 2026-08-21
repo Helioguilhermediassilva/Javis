@@ -24,11 +24,11 @@ describe("xavier artifacts", () => {
     expect(shouldUseWebSearchForRequest("Gere um PDF com este texto")).toBe(false);
   });
 
-  it("usa uma janela maior para pesquisa iniciada por áudio", () => {
-    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: true })).toBe(65_000);
-    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: true })).toBe(65_000);
-    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: false })).toBe(35_000);
-    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: false })).toBe(45_000);
+  it("usa uma janela maior para pesquisa e voz", () => {
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: true })).toBe(100_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: true })).toBe(90_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: true, useWebSearch: false })).toBe(80_000);
+    expect(getTelegramClaudeTimeoutMs({ hasAudio: false, useWebSearch: false })).toBe(75_000);
   });
 
   it("renderiza uma apresentação PPTX editável", async () => {

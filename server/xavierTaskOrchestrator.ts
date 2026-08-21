@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
+import { executeXavierRunwayMediaAction, executeXavierVisualPresentationAction, isXavierRunwayConfigured } from "./xavierMedia.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const ACTION_TABLE = "xavier_action_requests";
@@ -124,10 +125,37 @@ async function patchAction(action: XavierActionRequest, patch: Record<string, un
 
 export async function executeApprovedXavierActionRequest(action: XavierActionRequest): Promise<XavierActionRequest> {
   if (action.status !== "queued") return action;
+  const isDirectRunwayAction = action.kind === "image" || action.kind === "video" || (action.kind === "presentation" && action.metadata.visual_presentation === true);
+  if (isDirectRunwayAction && !isXavierRunwayConfigured()) {
+    return patchAction(action, {
+      status: "failed",
+      error_message: "O provedor Runway não está configurado no projeto Xavier. Adicione RUNWAYML_API_SECRET no ambiente de produção e tente novamente.",
+      result_text: "A ação foi aprovada, mas não pôde ser executada porque o provedor de mídia ainda não está configurado.",
+      completed_at: new Date().toISOString(),
+    });
+  }
   const url = executorUrl();
-  if (!url) return action;
+  if (!isDirectRunwayAction && !url) {
+    return patchAction(action, {
+      status: "failed",
+      error_message: "O executor externo do Xavier não está configurado no ambiente de produção.",
+      result_text: "A ação foi aprovada, mas o executor externo ainda não está configurado.",
+      completed_at: new Date().toISOString(),
+    });
+  }
   const running = await patchAction(action, { status: "running" });
   try {
+    if (isDirectRunwayAction) {
+      const result = action.kind === "presentation"
+        ? await executeXavierVisualPresentationAction(running)
+        : await executeXavierRunwayMediaAction(running);
+      return patchAction(running, {
+        status: "completed",
+        result_text: result.result_text,
+        attachments: result.attachments,
+        completed_at: new Date().toISOString(),
+      });
+    }
     const response = await fetch(`${url}/v1/xavier/actions`, {
       method: "POST",
       headers: {
@@ -194,9 +222,12 @@ export function classifyXavierTaskRequest(message: string): XavierTaskIntent | n
   const isSystem = /\b(?:sistema|aplicativo|aplicacao|aplicação|site|website|plataforma|software|codigo|código|programa|projeto)\b/i.test(text);
   if (isMcp) return { kind: "mcp", title: "Conexão MCP solicitada", requiresApproval: true, execution: "mcp" };
   if (isVideo) return { kind: "video", title: "Geração ou edição de vídeo", requiresApproval: true, execution: "provider" };
-  if (isImage) return { kind: "image", title: "Geração ou edição de imagem", requiresApproval: external, execution: external ? "provider" : "local" };
+  if (isPresentation) {
+    const visualPresentation = /\b(?:imagem|imagens|foto|fotos|visual|visuais|ilustracao|ilustracao|grafico|graficos|capa|figura|arte)\b/i.test(text);
+    return { kind: "presentation", title: visualPresentation ? "Apresentação com imagens solicitada" : "Apresentação solicitada", requiresApproval: external || visualPresentation, execution: visualPresentation ? "provider" : (external ? "external" : "local") };
+  }
+  if (isImage) return { kind: "image", title: "Geração ou edição de imagem", requiresApproval: true, execution: "provider" };
   if (isSpreadsheet) return { kind: "spreadsheet", title: "Planilha solicitada", requiresApproval: external, execution: external ? "external" : "local" };
-  if (isPresentation) return { kind: "presentation", title: "Apresentação solicitada", requiresApproval: external, execution: external ? "external" : "local" };
   if (isPdf) return { kind: "pdf", title: "PDF solicitado", requiresApproval: external, execution: external ? "external" : "local" };
   if (isSystem) return { kind: "system", title: "Sistema solicitado", requiresApproval: external, execution: external ? "external" : "local" };
   if (isDocument) return { kind: "document", title: "Documento solicitado", requiresApproval: external, execution: external ? "external" : "local" };
@@ -251,7 +282,11 @@ export async function createXavierActionRequest(input: {
       request_text: requestText,
       status: intent.requiresApproval ? "pending_approval" : "queued",
       approval_code: approvalCode,
-      metadata: { ...cleanJsonObject(input.metadata), execution: intent.execution },
+      metadata: {
+        ...cleanJsonObject(input.metadata),
+        execution: intent.execution,
+        ...(intent.kind === "presentation" && /\b(?:imagem|imagens|foto|fotos|visual|visuais|ilustracao|ilustracao|grafico|graficos|capa|figura|arte)\b/i.test(requestText) ? { visual_presentation: true } : {}),
+      },
     }),
   });
   const rows = await readRows<XavierActionRequest>(response, "action insert");

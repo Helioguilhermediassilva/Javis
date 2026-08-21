@@ -12,9 +12,13 @@ describe("Xavier task orchestrator", () => {
     expect(intent).toMatchObject({ kind: "pdf", requiresApproval: false, execution: "local" });
   });
 
-  it("mantém imagem local sem aprovação e exige aprovação para vídeo", () => {
-    expect(classifyXavierTaskRequest("crie uma imagem para a campanha")).toMatchObject({ kind: "image", requiresApproval: false, execution: "local" });
-    expect(classifyXavierTaskRequest("gere um vídeo institucional")).toMatchObject({ kind: "video", requiresApproval: true });
+  it("encaminha imagem raster e vídeo ao provedor com aprovação", () => {
+    expect(classifyXavierTaskRequest("crie uma imagem para a campanha")).toMatchObject({ kind: "image", requiresApproval: true, execution: "provider" });
+    expect(classifyXavierTaskRequest("gere um vídeo institucional")).toMatchObject({ kind: "video", requiresApproval: true, execution: "provider" });
+  });
+
+  it("prioriza apresentação visual quando o pedido combina PPTX e imagens", () => {
+    expect(classifyXavierTaskRequest("crie uma apresentação PPTX com imagens da campanha")).toMatchObject({ kind: "presentation", requiresApproval: true, execution: "provider" });
   });
 
   it("classifica sistemas e MCP como ações externas quando solicitado", () => {

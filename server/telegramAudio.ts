@@ -3,6 +3,7 @@ import { basename, extname } from "node:path";
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 const ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 const MAX_TELEGRAM_AUDIO_BYTES = 20 * 1024 * 1024;
+const MAX_TELEGRAM_IMAGE_BYTES = 20 * 1024 * 1024;
 
 export interface TelegramAudioReference {
   fileId: string;
@@ -10,6 +11,8 @@ export interface TelegramAudioReference {
   fileName: string;
   fileSize?: number;
 }
+
+export type TelegramImageReference = TelegramAudioReference;
 
 interface TelegramMedia {
   file_id?: string;
@@ -22,6 +25,11 @@ interface TelegramMedia {
 interface TelegramAudioMessage {
   voice?: TelegramMedia;
   audio?: TelegramMedia;
+  document?: TelegramMedia;
+}
+
+interface TelegramImageMessage {
+  photo?: TelegramMedia[];
   document?: TelegramMedia;
 }
 
@@ -55,6 +63,18 @@ function mediaReference(media: TelegramMedia | undefined, defaults: { mimeType: 
 }
 
 /** Identifica voice notes, arquivos de áudio e documentos cujo MIME é de áudio. */
+export function extractTelegramImageReference(message: TelegramImageMessage | undefined): TelegramImageReference | null {
+  const photo = Array.isArray(message?.photo) ? message.photo.filter((item) => Boolean(item?.file_id)).at(-1) : undefined;
+  if (photo?.file_id) {
+    return mediaReference(photo, { mimeType: "image/jpeg", fileName: "telegram-photo.jpg" });
+  }
+  const document = message?.document;
+  if (document?.file_id && (document.mime_type || "").toLowerCase().startsWith("image/")) {
+    return mediaReference(document, { mimeType: document.mime_type || "image/jpeg", fileName: document.file_name || "telegram-image" });
+  }
+  return null;
+}
+
 export function extractTelegramAudioReference(message: TelegramAudioMessage | undefined): TelegramAudioReference | null {
   const voice = mediaReference(message?.voice, { mimeType: "audio/ogg", fileName: "telegram-voice.ogg" });
   if (voice) return voice;
@@ -80,6 +100,9 @@ function ensureExtension(fileName: string, mimeType: string): string {
   if (mimeType === "audio/mpeg") return `${fileName}.mp3`;
   if (mimeType === "audio/mp4") return `${fileName}.m4a`;
   if (mimeType === "audio/wav" || mimeType === "audio/x-wav") return `${fileName}.wav`;
+  if (mimeType === "image/jpeg") return `${fileName}.jpg`;
+  if (mimeType === "image/png") return `${fileName}.png`;
+  if (mimeType === "image/webp") return `${fileName}.webp`;
   return `${fileName}.bin`;
 }
 
@@ -95,6 +118,22 @@ async function getTelegramFilePath(token: string, fileId: string): Promise<strin
     throw new Error(`Telegram getFile falhou: ${(payload.description || `HTTP ${response.status}`).slice(0, 180)}`);
   }
   return payload.result.file_path;
+}
+
+export async function downloadTelegramImage(token: string, reference: TelegramImageReference): Promise<{ bytes: Buffer; fileName: string; mimeType: string }> {
+  if (reference.fileSize && reference.fileSize > MAX_TELEGRAM_IMAGE_BYTES) {
+    throw new Error("Imagem Telegram excede o limite de 20 MB");
+  }
+  const filePath = await getTelegramFilePath(token, reference.fileId);
+  const response = await fetch(`${TELEGRAM_API_BASE}/file/bot${encodeURIComponent(token)}/${filePath}`, {
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`Download da imagem Telegram falhou: HTTP ${response.status}`);
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_TELEGRAM_IMAGE_BYTES) throw new Error("Imagem Telegram excede o limite de 20 MB");
+  const mimeType = (reference.mimeType || response.headers.get("content-type") || "image/jpeg").split(";", 1)[0].toLowerCase();
+  const fileName = ensureExtension(safeFileName(filePath, reference.fileName), mimeType);
+  return { bytes, fileName, mimeType };
 }
 
 async function downloadTelegramAudio(token: string, reference: TelegramAudioReference): Promise<{ bytes: Buffer; fileName: string }> {

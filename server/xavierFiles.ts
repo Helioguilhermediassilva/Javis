@@ -274,6 +274,35 @@ export async function createXavierFileUpload(input: {
   }
 }
 
+export async function createXavierFileFromBytes(input: {
+  userId: string;
+  conversation: XavierConversation;
+  fileName: string;
+  mimeType: string;
+  content: Buffer;
+}): Promise<{ file: XavierFileRecord; url: string }> {
+  const fileName = normalizeFileName(input.fileName);
+  const mimeType = (input.mimeType || "application/octet-stream").toLowerCase().slice(0, 160);
+  if (!input.content.length || input.content.length > MAX_FILE_BYTES) throw new Error("O arquivo recebido excede o limite de 20 MB ou está vazio");
+  await ensureBucket();
+  const id = randomUUID();
+  const path = storagePath(input.userId, input.conversation.id, id, fileName);
+  await uploadObject(path, input.content, mimeType);
+  const file = await insertFile({
+    id,
+    user_id: input.userId,
+    conversation_id: input.conversation.id,
+    file_name: fileName,
+    storage_path: path,
+    mime_type: mimeType,
+    size_bytes: input.content.length,
+    category: categoryOf(fileName, mimeType),
+    status: "ready",
+    version: 1,
+  });
+  return { file, url: await signedDownload(path) };
+}
+
 export async function finalizeXavierFile(input: {
   userId: string;
   conversationId: string;

@@ -11,6 +11,7 @@ const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.
 const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 100) || "xavier-files";
 const SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 
 export interface XavierGeneratedPresentationAttachment {
   file_name: string;
@@ -133,14 +134,29 @@ function parsePresentationOutline(outline: string, fallbackTitle: string): { tit
   };
 }
 
+async function imageUrlToDataUri(url: string): Promise<string> {
+  if (!/^https:\/\//i.test(url)) throw new Error("A imagem da apresentação precisa usar uma URL HTTPS");
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new Error(`Falha ao baixar imagem da apresentação (${response.status})`);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação excede 8 MB");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação está vazia ou excede 8 MB");
+  const contentType = (response.headers.get("content-type") || "image/png").split(";", 1)[0].toLowerCase();
+  if (!/^image\/(png|jpe?g|webp|gif)$/i.test(contentType)) throw new Error(`Formato de imagem não suportado no PPTX: ${contentType}`);
+  return `data:${contentType};base64,${bytes.toString("base64")}`;
+}
+
 function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance["addSlide"]>, index: number): void {
   slide.addShape(pptx.ShapeType.line, { x: 0.65, y: 7.08, w: 12.0, h: 0, line: { color: "1F3A4D", width: 0.7 } });
   slide.addText("XAVIER | INTELIGÊNCIA SOBERANA", { x: 0.7, y: 7.15, w: 4.2, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", margin: 0 });
   slide.addText(String(index), { x: 12.1, y: 7.15, w: 0.45, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", align: "right", margin: 0 });
 }
 
-export async function renderXavierPresentationBuffer(title: string, outline: string): Promise<Buffer> {
+export async function renderXavierPresentationBuffer(title: string, outline: string, imageUrls: string[] = []): Promise<Buffer> {
   const parsed = parsePresentationOutline(outline, title);
+  const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url)))).slice(0, 10);
+  const imageData = await Promise.all(normalizedImageUrls.map((url) => imageUrlToDataUri(url)));
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "Xavier - Inteligência Soberana";
@@ -156,20 +172,23 @@ export async function renderXavierPresentationBuffer(title: string, outline: str
   cover.background = { color: "071826" };
   cover.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 0.24, h: 7.5, line: { color: "14B8A6", transparency: 100 }, fill: { color: "14B8A6" } });
   cover.addShape(pptx.ShapeType.rect, { x: 0.7, y: 1.02, w: 1.08, h: 0.08, line: { color: "14B8A6", transparency: 100 }, fill: { color: "14B8A6" } });
-  cover.addText(parsed.title, { x: 0.7, y: 1.45, w: 10.7, h: 1.5, fontFace: "Aptos Display", fontSize: 30, bold: true, color: "FFFFFF", margin: 0, breakLine: false, fit: "shrink" });
-  cover.addText("Preparado por Xavier | Inteligência Soberana", { x: 0.7, y: 3.35, w: 7.5, h: 0.32, fontFace: "Aptos", fontSize: 12.5, color: "A8C4D2", margin: 0 });
+  cover.addText(parsed.title, { x: imageData.length ? 0.7 : 0.7, y: 1.45, w: imageData.length ? 6.7 : 10.7, h: 1.5, fontFace: "Aptos Display", fontSize: 30, bold: true, color: "FFFFFF", margin: 0, breakLine: false, fit: "shrink" });
+  if (imageData[0]) cover.addImage({ data: imageData[0], x: 8.1, y: 1.05, w: 4.35, h: 4.35, transparency: 4 });
+  cover.addText("Preparado por Xavier | Inteligência Soberana", { x: 0.7, y: 3.35, w: imageData.length ? 6.8 : 7.5, h: 0.32, fontFace: "Aptos", fontSize: 12.5, color: "A8C4D2", margin: 0 });
   cover.addText(new Date().toLocaleDateString("pt-BR"), { x: 0.7, y: 6.5, w: 2.5, h: 0.25, fontFace: "Aptos", fontSize: 8.5, color: "83A3B4", margin: 0 });
 
   parsed.slides.forEach((item, index) => {
     const slide = pptx.addSlide();
     slide.background = { color: "F7FAFC" };
     slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: 0.18, line: { color: "14B8A6", transparency: 100 }, fill: { color: "14B8A6" } });
-    slide.addText(item.title, { x: 0.7, y: 0.65, w: 11.7, h: 0.5, fontFace: "Aptos Display", fontSize: 24, bold: true, color: "073642", margin: 0, fit: "shrink" });
+    slide.addText(item.title, { x: 0.7, y: 0.65, w: imageData.length ? 7.2 : 11.7, h: 0.5, fontFace: "Aptos Display", fontSize: 24, bold: true, color: "073642", margin: 0, fit: "shrink" });
     const bullets = item.bullets.length ? item.bullets : ["Síntese preparada pelo Xavier."];
     slide.addText(
       bullets.map((text) => ({ text, options: { bullet: { indent: 18 }, hanging: 4, breakLine: true } })),
-      { x: 0.9, y: 1.65, w: 11.4, h: 4.9, fontFace: "Aptos", fontSize: 17, color: "1B3340", breakLine: false, paraSpaceAfter: 14, valign: "middle", margin: 0.04, fit: "shrink" },
+      { x: 0.9, y: 1.65, w: imageData.length ? 7.0 : 11.4, h: 4.9, fontFace: "Aptos", fontSize: 17, color: "1B3340", breakLine: false, paraSpaceAfter: 14, valign: "middle", margin: 0.04, fit: "shrink" },
     );
+    const slideImage = imageData[(index + 1) % imageData.length];
+    if (slideImage) slide.addImage({ data: slideImage, x: 8.35, y: 1.55, w: 4.15, h: 4.35 });
     addFooter(pptx, slide, index + 2);
   });
 
@@ -182,8 +201,9 @@ export async function createXavierPresentationAttachment(input: {
   taskId: string;
   title: string;
   outline: string;
+  imageUrls?: string[];
 }): Promise<XavierGeneratedPresentationAttachment> {
-  const pptx = await renderXavierPresentationBuffer(input.title, input.outline);
+  const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || []);
   if (pptx.length > MAX_FILE_SIZE) throw new Error("Apresentação gerada excede o limite de 20 MB");
   await ensureBucket();
   const userPart = storageSafePart(input.userId, "user");

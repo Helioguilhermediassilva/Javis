@@ -29,6 +29,7 @@ import {
   type ClaudeAttachment,
 } from "./xavierClaude.js";
 import {
+  fileDownloadUrl,
   getXavierFile,
   isEditableXavierFile,
   isFileEditRequest,
@@ -427,6 +428,26 @@ export interface ChatPayload {
   city?: string;
 }
 
+async function resolveSessionImageUrls(input: {
+  userId: string;
+  conversationId: string;
+  attachments?: AttachmentRef[];
+}): Promise<string[]> {
+  const fileIds = Array.from(new Set((input.attachments || []).map((attachment) => attachment.fileId).filter((fileId): fileId is string => Boolean(fileId))));
+  const urls: string[] = [];
+  for (const fileId of fileIds.slice(0, 4)) {
+    try {
+      const resolved = await fileDownloadUrl(input.userId, input.conversationId, fileId);
+      if (resolved.file.category === "image" && /^image\/(jpeg|png|gif|webp)$/i.test(resolved.file.mime_type) && /^https:\/\//i.test(resolved.url)) {
+        urls.push(resolved.url);
+      }
+    } catch (error) {
+      console.warn("[xavier-media] imagem de sessão ignorada", { fileId, error: (error as Error).message });
+    }
+  }
+  return urls;
+}
+
 function normalizeChatHistory(history: ChatMessage[]): ChatMessage[] {
   const cleaned = history
     .filter((m) => m && typeof m.content === "string" && (m.role === "system" || m.role === "user" || m.role === "assistant"))
@@ -701,6 +722,7 @@ async function createLocalXavierPresentation(input: {
   taskId: string;
   requestText: string;
   history: ChatMessage[];
+  imageUrls?: string[];
 }): Promise<XavierGeneratedPresentationAttachment> {
   const presentationPrompt = `Crie uma apresentação profissional e editável em português. Responda estritamente em Markdown: comece com '# título geral'; depois, para cada slide, use '## Slide N: título curto' seguido por 2 a 4 bullets concisos. Inclua capa, contexto, pontos principais, recomendações e próximos passos quando fizer sentido. Não escreva texto fora dessa estrutura e não diga que não pode gerar arquivos. Pedido original: ${input.requestText}`;
   let outline: string;
@@ -725,6 +747,7 @@ async function createLocalXavierPresentation(input: {
     taskId: input.taskId,
     title: "Apresentação solicitada ao Xavier",
     outline,
+    imageUrls: input.imageUrls,
   });
 }
 
@@ -733,6 +756,7 @@ async function buildLocalPresentationResult(input: {
   taskId: string;
   requestText: string;
   history: ChatMessage[];
+  imageUrls?: string[];
 }): Promise<{ reply: string; attachment: XavierGeneratedPresentationAttachment }> {
   const attachment = await createLocalXavierPresentation(input);
   return {
@@ -903,13 +927,22 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     }
     const taskIntent = classifyXavierTaskRequest(authenticatedPayload.userMessage || "");
     if (taskIntent?.requiresApproval) {
+      const referenceImageUrls = await resolveSessionImageUrls({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        attachments: authenticatedPayload.attachments,
+      });
       const action = await createXavierActionRequest({
         userId: context.userId,
         channel: "web",
         conversationId: context.conversation.id,
         requestText: authenticatedPayload.userMessage || "",
         intent: taskIntent,
-        metadata: { requested_engine: requestedEngine, locale: normalizeSentimentLocale(authenticatedPayload.locale) },
+        metadata: {
+          requested_engine: requestedEngine,
+          locale: normalizeSentimentLocale(authenticatedPayload.locale),
+          reference_image_urls: referenceImageUrls,
+        },
       });
       const reply = approvalPrompt(action);
       if (context.persist) {
@@ -941,11 +974,17 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
     }
     if (context.persist && isPresentationTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
+      const imageUrls = await resolveSessionImageUrls({
+        userId: context.userId,
+        conversationId: context.conversation.id,
+        attachments: authenticatedPayload.attachments,
+      });
       const { reply, attachment } = await buildLocalPresentationResult({
         userId: context.userId,
         taskId: `web-${context.conversation.id}-${Date.now()}`,
         requestText: authenticatedPayload.userMessage || "",
         history: context.history,
+        imageUrls,
       });
       await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
       await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
@@ -1356,13 +1395,18 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }
   const taskIntent = classifyXavierTaskRequest(userMessage);
   if (taskIntent?.requiresApproval) {
+    const referenceImageUrls = await resolveSessionImageUrls({
+      userId: context.userId,
+      conversationId: context.conversation.id,
+      attachments,
+    });
     const action = await createXavierActionRequest({
       userId: context.userId,
       channel: "web",
       conversationId: context.conversation.id,
       requestText: userMessage,
       intent: taskIntent,
-      metadata: { requested_engine: requestedEngine, locale },
+      metadata: { requested_engine: requestedEngine, locale, reference_image_urls: referenceImageUrls },
     });
     const reply = approvalPrompt(action);
     if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
@@ -1399,11 +1443,17 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         sseWrite(res, { type: "delta", text: reply });
         sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", `${streamOfficeKind}.local`], executor: "claude", local_artifact: streamOfficeKind });
       } else if (isPresentationTaskRequest(userMessage)) {
+        const imageUrls = await resolveSessionImageUrls({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          attachments,
+        });
         const { reply, attachment } = await buildLocalPresentationResult({
           userId: context.userId,
           taskId: `web-${context.conversation.id}-${Date.now()}`,
           requestText: userMessage,
           history,
+          imageUrls,
         });
         if (context.persist) {
           await appendXavierMessage({
