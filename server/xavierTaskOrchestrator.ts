@@ -129,7 +129,7 @@ export async function executeApprovedXavierActionRequest(action: XavierActionReq
   if (isDirectRunwayAction && !isXavierRunwayConfigured()) {
     return patchAction(action, {
       status: "failed",
-      error_message: "O provedor Runway não está configurado no projeto Xavier. Adicione RUNWAYML_API_SECRET no ambiente de produção e tente novamente.",
+      error_message: "O provedor Runway não está configurado no projeto Xavier. Adicione RUNWAY_API_SECRET no ambiente de produção e tente novamente.",
       result_text: "A ação foi aprovada, mas não pôde ser executada porque o provedor de mídia ainda não está configurado.",
       completed_at: new Date().toISOString(),
     });

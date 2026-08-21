@@ -1,20 +1,69 @@
-import { getSupabaseAdminKey } from "./supabaseAdmin.js";
 import type { XavierActionAttachment, XavierActionRequest } from "./xavierTaskOrchestrator.js";
 import { createXavierPresentationAttachment } from "./xavierPresentation.js";
 
 const RUNWAY_API_BASE_URL = (process.env.RUNWAY_API_BASE_URL || "https://api.dev.runwayml.com").replace(/\/+$/, "");
-const RUNWAY_API_SECRET = (process.env.RUNWAYML_API_SECRET || process.env.RUNWAY_API_SECRET || "").trim();
-const RUNWAY_API_VERSION = process.env.RUNWAY_API_VERSION || "2024-11-06";
-const RUNWAY_IMAGE_MODEL = process.env.RUNWAY_IMAGE_MODEL || "gen4_image";
-const RUNWAY_VIDEO_MODEL = process.env.RUNWAY_VIDEO_MODEL || "gen4.5";
-const RUNWAY_IMAGE_RATIO = process.env.RUNWAY_IMAGE_RATIO || "1920:1080";
-const RUNWAY_VIDEO_RATIO = process.env.RUNWAY_VIDEO_RATIO || "1280:768";
-const RUNWAY_VIDEO_DURATION = Math.max(5, Math.min(10, Number(process.env.RUNWAY_VIDEO_DURATION || 5)));
+const RUNWAY_API_SECRET = (process.env.RUNWAY_API_SECRET || process.env.RUNWAYML_API_SECRET || "").trim();
+const RUNWAY_API_VERSION = (process.env.RUNWAY_API_VERSION || "2024-11-06").trim();
+const RUNWAY_PROMPT_MAX = 1_000;
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 100) || "xavier-files";
 const SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
 const MAX_MEDIA_SIZE = 80 * 1024 * 1024;
-const MAX_REFERENCE_IMAGES = 4;
+const MAX_REFERENCE_IMAGES = 3;
+
+const IMAGE_MODELS = new Set([
+  "gen4_image",
+  "gen4_image_turbo",
+  "gpt_image_2",
+  "gemini_image3_pro",
+  "gemini_image3.1_flash",
+  "seedream5_pro",
+  "seedream5_lite",
+  "grok_imagine_image_2",
+  "gemini_2.5_flash",
+]);
+
+const VIDEO_MODELS = new Set([
+  "gen4.5",
+  "gen4_turbo",
+  "veo3.1",
+  "veo3.1_fast",
+  "hailuo3",
+  "happyhorse_1_0",
+  "seedance2",
+  "seedance2_fast",
+  "seedance2_mini",
+  "gemini_omni_flash",
+  "seedance2_5",
+  "grok_imagine_1_5",
+]);
+
+const IMAGE_RATIOS = new Set([
+  "1024:1024",
+  "1080:1080",
+  "1168:880",
+  "1360:768",
+  "1440:1080",
+  "1080:1440",
+  "1808:768",
+  "1920:1080",
+  "1080:1920",
+  "2112:912",
+  "1280:720",
+  "720:1280",
+  "720:720",
+  "960:720",
+  "720:960",
+  "1680:720",
+]);
+
+const VIDEO_RATIOS = new Set(["1280:720", "720:1280"]);
+
+const RUNWAY_IMAGE_MODEL = normalizeImageModel(process.env.RUNWAY_IMAGE_MODEL || "gen4_image");
+const RUNWAY_VIDEO_MODEL = normalizeVideoModel(process.env.RUNWAY_VIDEO_MODEL || "gen4.5");
+const RUNWAY_IMAGE_RATIO = validImageRatio(process.env.RUNWAY_IMAGE_RATIO) ? process.env.RUNWAY_IMAGE_RATIO! : "1360:768";
+const RUNWAY_VIDEO_RATIO = validVideoRatio(process.env.RUNWAY_VIDEO_RATIO) ? process.env.RUNWAY_VIDEO_RATIO! : "1280:720";
+const RUNWAY_VIDEO_DURATION = clampDuration(Number(process.env.RUNWAY_VIDEO_DURATION || 5));
 
 export interface XavierRunwayMediaResult {
   result_text: string;
@@ -28,6 +77,47 @@ interface RunwayTaskResponse {
   failure?: unknown;
   failureCode?: unknown;
   failureReason?: unknown;
+}
+
+function normalizeImageModel(value: string): string {
+  const aliases: Record<string, string> = {
+    "gen-4": "gen4_image",
+    "gen-4-image-turbo": "gen4_image_turbo",
+    "gpt-image-2": "gpt_image_2",
+    "seedream-5": "seedream5_pro",
+    "grok-imagine-image-2": "grok_imagine_image_2",
+  };
+  const model = aliases[value.trim()] || value.trim();
+  return IMAGE_MODELS.has(model) ? model : "gen4_image";
+}
+
+function normalizeVideoModel(value: string): string {
+  const aliases: Record<string, string> = {
+    "gen-4.5": "gen4.5",
+    "gen-4-turbo": "gen4_turbo",
+    "veo-3.1": "veo3.1",
+    "hailuo-3": "hailuo3",
+    "seedance-2": "seedance2",
+    "seedance-2-fast": "seedance2_fast",
+    "seedance-2-mini": "seedance2_mini",
+    "seedance-2.5": "seedance2_5",
+    "grok-imagine-1.5": "grok_imagine_1_5",
+    "gemini-omni-flash": "gemini_omni_flash",
+  };
+  const model = aliases[value.trim()] || value.trim();
+  return VIDEO_MODELS.has(model) ? model : "gen4.5";
+}
+
+function validImageRatio(value: string | undefined): value is string {
+  return Boolean(value && IMAGE_RATIOS.has(value));
+}
+
+function validVideoRatio(value: string | undefined): value is string {
+  return Boolean(value && VIDEO_RATIOS.has(value));
+}
+
+function clampDuration(value: number): number {
+  return Number.isInteger(value) ? Math.max(2, Math.min(10, value)) : 5;
 }
 
 function safePart(value: string, fallback: string): string {
@@ -65,12 +155,16 @@ function actionReferenceImageUrls(action: XavierActionRequest): string[] {
 
 function normalizeOutputUrls(value: unknown): string[] {
   if (typeof value === "string") return /^https:\/\//i.test(value) ? [value] : [];
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => normalizeOutputUrls(item)).slice(0, 4);
+  if (Array.isArray(value)) return value.flatMap((item) => normalizeOutputUrls(item)).slice(0, 4);
+  if (!value || typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  const directValues = [record.url, record.uri, record.output, record.artifacts, record.assets, record.results];
+  return Array.from(new Set(directValues.flatMap((item) => normalizeOutputUrls(item)))).slice(0, 4);
 }
 
 async function createRunwayTask(path: string, body: Record<string, unknown>): Promise<string> {
-  if (!isXavierRunwayConfigured()) throw new Error("RUNWAYML_API_SECRET não está configurada no projeto Xavier");
+  if (!isXavierRunwayConfigured()) throw new Error("RUNWAY_API_SECRET não está configurada no projeto Xavier");
   const response = await fetch(`${RUNWAY_API_BASE_URL}${path}`, {
     method: "POST",
     headers: runwayHeaders(),
@@ -146,7 +240,9 @@ async function storeMedia(input: {
   kind: "image" | "video";
 }): Promise<XavierActionAttachment> {
   const downloaded = await downloadMedia(input.mediaUrl);
-  const extension = input.kind === "video" ? (downloaded.mimeType.includes("webm") ? "webm" : "mp4") : downloaded.mimeType.includes("webp") ? "webp" : downloaded.mimeType.includes("jpeg") ? "jpg" : "png";
+  const extension = input.kind === "video"
+    ? (downloaded.mimeType.includes("webm") ? "webm" : "mp4")
+    : downloaded.mimeType.includes("webp") ? "webp" : downloaded.mimeType.includes("jpeg") ? "jpg" : "png";
   await ensureBucket();
   const path = `xavier/${safePart(input.userId, "user")}/media-${safePart(input.taskId, "task")}.${extension}`;
   const upload = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
@@ -174,24 +270,51 @@ async function storeMedia(input: {
   return { file_name: `${input.kind === "video" ? "xavier-video" : "xavier-imagem"}-${safePart(input.taskId, "arquivo")}.${extension}`, url, size_bytes: downloaded.buffer.length, mime_type: downloaded.mimeType };
 }
 
+function imageReferencePayload(references: string[]): Array<{ uri: string; tag: string }> | undefined {
+  if (!references.length) return undefined;
+  return references.slice(0, MAX_REFERENCE_IMAGES).map((uri, index) => ({ uri, tag: `referencia${index + 1}` }));
+}
+
+function imageToVideoPayload(promptText: string, referenceImage: string): Record<string, unknown> {
+  return {
+    model: RUNWAY_VIDEO_MODEL,
+    promptImage: [{ uri: referenceImage, position: "first" }],
+    promptText: promptText.slice(0, RUNWAY_PROMPT_MAX),
+    ratio: RUNWAY_VIDEO_RATIO,
+    duration: RUNWAY_VIDEO_DURATION,
+    outputFormat: "mp4",
+  };
+}
+
+function textToVideoPayload(promptText: string): Record<string, unknown> {
+  return {
+    model: RUNWAY_VIDEO_MODEL,
+    promptText: promptText.slice(0, RUNWAY_PROMPT_MAX),
+    ratio: RUNWAY_VIDEO_RATIO,
+    duration: RUNWAY_VIDEO_DURATION,
+    outputFormat: "mp4",
+  };
+}
+
+function textToImagePayload(promptText: string, references: string[]): Record<string, unknown> {
+  const referenceImages = imageReferencePayload(references);
+  return {
+    model: RUNWAY_IMAGE_MODEL,
+    promptText: promptText.slice(0, RUNWAY_PROMPT_MAX),
+    ratio: RUNWAY_IMAGE_RATIO,
+    ...(referenceImages ? { referenceImages } : {}),
+  };
+}
+
 export async function executeXavierRunwayMediaAction(action: XavierActionRequest): Promise<XavierRunwayMediaResult> {
   if (action.kind !== "image" && action.kind !== "video") throw new Error("O executor Runway recebeu um tipo de mídia inválido");
   const references = actionReferenceImageUrls(action);
   const isVideo = action.kind === "video";
-  const taskId = await createRunwayTask(isVideo ? "/v1/image_to_video" : "/v1/text_to_image", isVideo
-    ? {
-      model: RUNWAY_VIDEO_MODEL,
-      promptText: action.request_text.slice(0, 1_500),
-      ...(references[0] ? { promptImage: references[0] } : {}),
-      ratio: RUNWAY_VIDEO_RATIO,
-      duration: RUNWAY_VIDEO_DURATION,
-    }
-    : {
-      model: RUNWAY_IMAGE_MODEL,
-      promptText: action.request_text.slice(0, 1_500),
-      ratio: RUNWAY_IMAGE_RATIO,
-      ...(references.length ? { referenceImages: references.map((uri, index) => ({ uri, tag: `referencia${index + 1}` })) } : {}),
-    });
+  const endpoint = isVideo && references[0] ? "/v1/image_to_video" : isVideo ? "/v1/text_to_video" : "/v1/text_to_image";
+  const body = isVideo
+    ? references[0] ? imageToVideoPayload(action.request_text, references[0]) : textToVideoPayload(action.request_text)
+    : textToImagePayload(action.request_text, references);
+  const taskId = await createRunwayTask(endpoint, body);
   const completed = await waitForRunwayTask(taskId, isVideo ? 210_000 : 100_000);
   const outputUrls = normalizeOutputUrls(completed.output);
   if (!outputUrls[0]) throw new Error("Runway concluiu a tarefa sem retornar uma URL de saída");
@@ -224,14 +347,15 @@ export async function executeXavierVisualPresentationAction(action: XavierAction
 }
 
 export async function generateXavierRunwayImage(input: { userId: string; taskId: string; prompt: string; referenceImages?: string[] }): Promise<XavierActionAttachment> {
-  const taskId = await createRunwayTask("/v1/text_to_image", {
-    model: RUNWAY_IMAGE_MODEL,
-    promptText: input.prompt.slice(0, 1_500),
-    ratio: RUNWAY_IMAGE_RATIO,
-    ...(input.referenceImages?.length ? { referenceImages: input.referenceImages.slice(0, MAX_REFERENCE_IMAGES).map((uri, index) => ({ uri, tag: `referencia${index + 1}` })) } : {}),
-  });
+  const taskId = await createRunwayTask("/v1/text_to_image", textToImagePayload(input.prompt, input.referenceImages?.slice(0, MAX_REFERENCE_IMAGES) || []));
   const completed = await waitForRunwayTask(taskId, 100_000);
   const outputUrl = normalizeOutputUrls(completed.output)[0];
   if (!outputUrl) throw new Error("Runway concluiu a imagem sem retornar uma URL de saída");
   return storeMedia({ userId: input.userId, taskId: input.taskId, mediaUrl: outputUrl, kind: "image" });
+}
+
+function getSupabaseAdminKey(): string {
+  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  if (!key) throw new Error("SUPABASE_SERVICE_ROLE_KEY não está configurada no projeto Xavier");
+  return key;
 }
