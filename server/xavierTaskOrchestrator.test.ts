@@ -12,8 +12,8 @@ describe("Xavier task orchestrator", () => {
     expect(intent).toMatchObject({ kind: "pdf", requiresApproval: false, execution: "local" });
   });
 
-  it("exige aprovação para imagem e vídeo", () => {
-    expect(classifyXavierTaskRequest("crie uma imagem para a campanha")).toMatchObject({ kind: "image", requiresApproval: true });
+  it("mantém imagem local sem aprovação e exige aprovação para vídeo", () => {
+    expect(classifyXavierTaskRequest("crie uma imagem para a campanha")).toMatchObject({ kind: "image", requiresApproval: false, execution: "local" });
     expect(classifyXavierTaskRequest("gere um vídeo institucional")).toMatchObject({ kind: "video", requiresApproval: true });
   });
 

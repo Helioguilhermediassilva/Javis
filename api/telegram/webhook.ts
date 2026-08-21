@@ -11,7 +11,8 @@ import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegra
 import { extractTelegramAudioReference, transcribeTelegramAudio } from "../../server/telegramAudio.js";
 import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
-import { getTelegramClaudeTimeoutMs, isPdfTaskRequest, isPresentationTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
+import { createXavierOfficeAttachment } from "../../server/xavierOffice.js";
+import { getTelegramClaudeTimeoutMs, isDocumentTaskRequest, isImageTaskRequest, isPdfTaskRequest, isPresentationTaskRequest, isSpreadsheetTaskRequest, isVideoTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
 import { handleXavierCrmRequest } from "../../server/xavierCrmAgent.js";
 import { sendXavierTelegramVoiceReply } from "../../server/xavierTelegramVoice.js";
 import {
@@ -357,30 +358,36 @@ async function processPerUserTelegramMessage(input: {
 
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
-    const claudeTimeoutMs = audio ? 25_000 : 45_000;
+    const requestIsSpreadsheet = !requestIsPdf && !requestIsPresentation && isSpreadsheetTaskRequest(text);
+    const requestIsDocument = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && isDocumentTaskRequest(text);
+    const requestIsImage = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && isImageTaskRequest(text);
+    const requestIsVideo = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && !requestIsImage && isVideoTaskRequest(text);
+    const claudeTimeoutMs = audio ? 80_000 : 75_000;
     console.info("[telegram] request routed", {
       updateId: update.update_id,
       requestIsPdf,
       requestIsPresentation,
+      requestIsSpreadsheet,
+      requestIsDocument,
+      requestIsImage,
+      requestIsVideo,
       hasAudio: Boolean(audio),
     });
-    if (requestIsPdf || requestIsPresentation) {
+    if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
       const attachment = requestIsPdf
-        ? await createLocalXavierPdf({
-          userId: connection.user_id,
-          taskId: `telegram-${connection.id}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        })
-        : await createLocalXavierPresentation({
-          userId: connection.user_id,
-          taskId: `telegram-${connection.id}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        });
-      const kind = requestIsPdf ? "PDF" : "apresentação editável";
+        ? await createLocalXavierPdf({ userId: connection.user_id, taskId: `telegram-${connection.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+        : requestIsPresentation
+          ? await createLocalXavierPresentation({ userId: connection.user_id, taskId: `telegram-${connection.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+          : await createXavierOfficeAttachment({
+            userId: connection.user_id,
+            taskId: `telegram-${connection.id}-${message.message_id}`,
+            title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
+            kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
+            requestText: text,
+            history: previousHistory,
+            timeoutMs: claudeTimeoutMs,
+          });
+      const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
       const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendXavierMessage({
         userId: connection.user_id,
@@ -668,35 +675,41 @@ async function processOfficialTelegramMessage(input: {
     }
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
+    const requestIsSpreadsheet = !requestIsPdf && !requestIsPresentation && isSpreadsheetTaskRequest(text);
+    const requestIsDocument = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && isDocumentTaskRequest(text);
+    const requestIsImage = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && isImageTaskRequest(text);
+    const requestIsVideo = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && !requestIsImage && isVideoTaskRequest(text);
     // A transcrição de áudio consome parte do tempo antes da pesquisa começar.
     // Reserve tempo suficiente para o Claude executar a busca e redigir as fontes.
     const claudeTimeoutMs = audio
-      ? (researchRequested ? 65_000 : 35_000)
-      : (researchRequested ? 65_000 : 45_000);
+      ? (researchRequested ? 100_000 : 80_000)
+      : (researchRequested ? 100_000 : 75_000);
     console.info("[telegram:official] request routed", {
       updateId: update.update_id,
       userId: link.user_id,
       requestIsPdf,
       requestIsPresentation,
+      requestIsSpreadsheet,
+      requestIsDocument,
+      requestIsImage,
+      requestIsVideo,
       hasAudio: Boolean(audio),
     });
-    if (requestIsPdf || requestIsPresentation) {
+    if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
       const attachment = requestIsPdf
-        ? await createLocalXavierPdf({
-          userId: link.user_id,
-          taskId: `official-telegram-${link.id}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        })
-        : await createLocalXavierPresentation({
-          userId: link.user_id,
-          taskId: `official-telegram-${link.id}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        });
-      const kind = requestIsPdf ? "PDF" : "apresentação editável";
+        ? await createLocalXavierPdf({ userId: link.user_id, taskId: `official-telegram-${link.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+        : requestIsPresentation
+          ? await createLocalXavierPresentation({ userId: link.user_id, taskId: `official-telegram-${link.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+          : await createXavierOfficeAttachment({
+            userId: link.user_id,
+            taskId: `official-telegram-${link.id}-${message.message_id}`,
+            title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
+            kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
+            requestText: text,
+            history: previousHistory,
+            timeoutMs: claudeTimeoutMs,
+          });
+      const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
       const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendXavierMessage({
         userId: link.user_id,
@@ -888,31 +901,37 @@ async function processLegacyTelegramMessage(input: {
 
     const requestIsPdf = isPdfTaskRequest(text);
     const requestIsPresentation = !requestIsPdf && isPresentationTaskRequest(text);
+    const requestIsSpreadsheet = !requestIsPdf && !requestIsPresentation && isSpreadsheetTaskRequest(text);
+    const requestIsDocument = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && isDocumentTaskRequest(text);
+    const requestIsImage = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && isImageTaskRequest(text);
+    const requestIsVideo = !requestIsPdf && !requestIsPresentation && !requestIsSpreadsheet && !requestIsDocument && !requestIsImage && isVideoTaskRequest(text);
     const researchRequested = shouldUseWebSearchForRequest(text);
     const claudeTimeoutMs = getTelegramClaudeTimeoutMs({ hasAudio: Boolean(audio), useWebSearch: researchRequested });
     console.info("[telegram] request routed", {
       updateId: update.update_id,
       requestIsPdf,
       requestIsPresentation,
+      requestIsSpreadsheet,
+      requestIsDocument,
+      requestIsImage,
+      requestIsVideo,
       hasAudio: Boolean(audio),
     });
-    if (requestIsPdf || requestIsPresentation) {
+    if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
       const attachment = requestIsPdf
-        ? await createLocalXavierPdf({
-          userId: `legacy-${chatId}`,
-          taskId: `telegram-${chatId}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        })
-        : await createLocalXavierPresentation({
-          userId: `legacy-${chatId}`,
-          taskId: `telegram-${chatId}-${message.message_id}`,
-          requestText: text,
-          history: previousHistory,
-          timeoutMs: claudeTimeoutMs,
-        });
-      const kind = requestIsPdf ? "PDF" : "apresentação editável";
+        ? await createLocalXavierPdf({ userId: `legacy-${chatId}`, taskId: `telegram-${chatId}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+        : requestIsPresentation
+          ? await createLocalXavierPresentation({ userId: `legacy-${chatId}`, taskId: `telegram-${chatId}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+          : await createXavierOfficeAttachment({
+            userId: `legacy-${chatId}`,
+            taskId: `telegram-${chatId}-${message.message_id}`,
+            title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
+            kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
+            requestText: text,
+            history: previousHistory,
+            timeoutMs: claudeTimeoutMs,
+          });
+      const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
       const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
       await appendTelegramMessage({
         chatId,
@@ -925,6 +944,11 @@ async function processLegacyTelegramMessage(input: {
       });
       await sendLegacyTelegramText(chatId, reply);
       await legacyTelegramApi("sendDocument", { chat_id: chatId, document: attachment.url, caption: `Arquivo gerado pelo Xavier: ${attachment.file_name}` });
+      await sendLinkedVoiceReplyIfNeeded({ token: process.env.TELEGRAM_BOT_TOKEN || "", chatId, hasAudio: Boolean(audio), text: reply });
+      return;
+    }
+    if (requestIsVideo) {
+      await sendLegacyTelegramText(chatId, "O pedido de vídeo foi identificado. Para gerar ou editar um vídeo real, envie a confirmação com o código de aprovação exibido pelo Xavier após configurar um provedor de vídeo.");
       return;
     }
 

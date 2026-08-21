@@ -8,7 +8,7 @@ const ACTION_EXECUTOR_URL = (process.env.XAVIER_ACTION_EXECUTOR_URL || "").trim(
 const ACTION_EXECUTOR_SECRET = (process.env.XAVIER_ACTION_EXECUTOR_SECRET || "").trim();
 
 export type XavierTaskChannel = "web" | "telegram";
-export type XavierTaskKind = "document" | "pdf" | "presentation" | "image" | "video" | "system" | "mcp" | "external";
+export type XavierTaskKind = "document" | "pdf" | "presentation" | "spreadsheet" | "image" | "video" | "system" | "mcp" | "external";
 export type XavierActionStatus = "pending_approval" | "queued" | "running" | "completed" | "failed" | "cancelled";
 
 export interface XavierActionAttachment {
@@ -186,14 +186,16 @@ export function classifyXavierTaskRequest(message: string): XavierTaskIntent | n
   const external = EXTERNAL_PATTERNS.some((pattern) => pattern.test(text));
   const isMcp = /\b(?:mcp|model context protocol|servidor mcp|ferramenta mcp)\b/i.test(text);
   const isVideo = /\b(?:video|videos|filme|animacao|animação|clipe|reels?)\b/i.test(text);
-  const isImage = /\b(?:imagem|imagens|ilustracao|ilustração|arte|logo|banner|foto)\b/i.test(text);
+  const isImage = /\b(?:imagem|imagens|ilustracao|ilustração|arte|logo|banner|foto|icone|ícone|infografico|infográfico)\b/i.test(text);
+  const isSpreadsheet = /\b(?:planilha|planilhas|excel|xlsx|xls|csv|tabela|orcamento|orçamento)\b/i.test(text);
   const isPresentation = /\b(?:apresentacao|apresentações|apresentacoes|slides?|slide deck|powerpoint|pptx?)\b/i.test(text);
   const isPdf = /\bpdf\b/i.test(text);
   const isDocument = /\b(?:documento|documentos|contrato|relatorio|relatório|memorando|oficio|ofício|carta|texto)\b/i.test(text);
   const isSystem = /\b(?:sistema|aplicativo|aplicacao|aplicação|site|website|plataforma|software|codigo|código|programa|projeto)\b/i.test(text);
   if (isMcp) return { kind: "mcp", title: "Conexão MCP solicitada", requiresApproval: true, execution: "mcp" };
   if (isVideo) return { kind: "video", title: "Geração ou edição de vídeo", requiresApproval: true, execution: "provider" };
-  if (isImage) return { kind: "image", title: "Geração ou edição de imagem", requiresApproval: true, execution: "provider" };
+  if (isImage) return { kind: "image", title: "Geração ou edição de imagem", requiresApproval: external, execution: external ? "provider" : "local" };
+  if (isSpreadsheet) return { kind: "spreadsheet", title: "Planilha solicitada", requiresApproval: external, execution: external ? "external" : "local" };
   if (isPresentation) return { kind: "presentation", title: "Apresentação solicitada", requiresApproval: external, execution: external ? "external" : "local" };
   if (isPdf) return { kind: "pdf", title: "PDF solicitado", requiresApproval: external, execution: external ? "external" : "local" };
   if (isSystem) return { kind: "system", title: "Sistema solicitado", requiresApproval: external, execution: external ? "external" : "local" };

@@ -20,8 +20,7 @@ import {
   maybeCompactXavierConversation,
   type XavierConversation,
 } from "./xavierMemory.js";
-import { isPdfTaskRequest } from "./xavierManus.js";
-import { isPresentationTaskRequest } from "./xavierArtifacts.js";
+import { isDocumentTaskRequest, isImageTaskRequest, isPdfTaskRequest, isPresentationTaskRequest, isSpreadsheetTaskRequest, isVideoTaskRequest } from "./xavierArtifacts.js";
 import {
   appendClaudeCitations,
   generateClaudeReply,
@@ -39,6 +38,7 @@ import {
 } from "./xavierFiles.js";
 import { createXavierPdfAttachment, type XavierGeneratedPdfAttachment } from "./xavierPdf.js";
 import { createXavierPresentationAttachment, type XavierGeneratedPresentationAttachment } from "./xavierPresentation.js";
+import { createXavierOfficeAttachment, type XavierGeneratedOfficeAttachment } from "./xavierOffice.js";
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
 import {
@@ -741,6 +741,19 @@ async function buildLocalPresentationResult(input: {
   };
 }
 
+async function buildLocalOfficeResult(input: {
+  userId: string;
+  taskId: string;
+  requestText: string;
+  history: ChatMessage[];
+  kind: "document" | "spreadsheet" | "image";
+}): Promise<{ reply: string; attachment: XavierGeneratedOfficeAttachment }> {
+  const title = input.kind === "spreadsheet" ? "Planilha solicitada ao Xavier" : input.kind === "image" ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier";
+  const attachment = await createXavierOfficeAttachment({ ...input, title });
+  const label = input.kind === "spreadsheet" ? "planilha editável" : input.kind === "image" ? "imagem vetorial" : "documento editável";
+  return { reply: `Preparei a ${label} solicitada, senhor. O arquivo está disponível no painel: ${attachment.file_name}`, attachment };
+}
+
 function persistedUserContent(payload: ChatPayload): string {
   const text = (payload.userMessage || "").toString().trim();
   const attachmentNames = (payload.attachments || [])
@@ -950,6 +963,26 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         metadata: { route: "chat_json" },
       });
       sendJson(res, 200, { reply, tools_used: ["pptxgenjs.local"], timings: [], attachments: [attachment], local_presentation: true });
+      return;
+    }
+    const officeKind = isSpreadsheetTaskRequest(authenticatedPayload.userMessage || "")
+      ? "spreadsheet" as const
+      : isImageTaskRequest(authenticatedPayload.userMessage || "")
+        ? "image" as const
+        : isDocumentTaskRequest(authenticatedPayload.userMessage || "")
+          ? "document" as const
+          : null;
+    if (context.persist && officeKind && !fileEditRequested) {
+      const { reply, attachment } = await buildLocalOfficeResult({
+        userId: context.userId,
+        taskId: `web-${context.conversation.id}-${Date.now()}`,
+        requestText: authenticatedPayload.userMessage || "",
+        history: context.history,
+        kind: officeKind,
+      });
+      await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+      await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
+      sendJson(res, 200, { reply, tools_used: [`${officeKind}.local`], timings: [], attachments: [attachment], local_artifact: officeKind });
       return;
     }
     if (claudeTask && isClaudeConfigured() && (!isPdfTaskRequest(authenticatedPayload.userMessage || "") || fileEditRequested)) {
@@ -1343,7 +1376,29 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   if (claudeTask && (isClaudeConfigured() || requestedEngine === "claude" || requestedEngine === "manus")) {
     try {
       if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
-      if (isPresentationTaskRequest(userMessage)) {
+      const streamOfficeKind = isSpreadsheetTaskRequest(userMessage)
+        ? "spreadsheet" as const
+        : isImageTaskRequest(userMessage)
+          ? "image" as const
+          : isDocumentTaskRequest(userMessage)
+            ? "document" as const
+            : null;
+      if (streamOfficeKind) {
+        const { reply, attachment } = await buildLocalOfficeResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: userMessage,
+          history,
+          kind: streamOfficeKind,
+        });
+        if (context.persist) {
+          await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
+        }
+        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
+        sseWrite(res, { type: "delta", text: reply });
+        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", `${streamOfficeKind}.local`], executor: "claude", local_artifact: streamOfficeKind });
+      } else if (isPresentationTaskRequest(userMessage)) {
         const { reply, attachment } = await buildLocalPresentationResult({
           userId: context.userId,
           taskId: `web-${context.conversation.id}-${Date.now()}`,

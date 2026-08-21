@@ -32,7 +32,7 @@ O projeto foi estruturado para crescer de forma incremental, preservando a exper
 | Voz | Interação por fala e resposta com a voz clonada autorizada do Hélio Guilherme. |
 | Memória | Continuidade de contexto com retenção configurável e controle de crescimento. |
 | Dados e pesquisa | Consulta a fontes oficiais e pesquisa contextual para apoiar decisões. |
-| Documentos | Criação e entrega de PDFs e apresentações editáveis quando solicitados. |
+| Artefatos | Criação e entrega de PDF, PPTX, DOCX, XLSX e imagens vetoriais SVG quando solicitados. |
 | Telegram | Conversa com o Xavier fora do cockpit, incluindo texto, áudio e arquivos. |
 | CRM invisível | Registro de contatos, demandas, prazos, prioridades e anotações sem exigir uma tela adicional. |
 | Privacidade | Separação de contas, memória, arquivos e registros por usuário. |
@@ -116,7 +116,7 @@ O executor conversacional utiliza `claude-fable-5` como modelo padrão por meio 
 
 Mensagens de voz do Telegram são transcritas antes de chegar ao mesmo contexto Claude da sessão. Quando `ELEVENLABS_API_KEY` está configurada, respostas a mensagens de voz também podem ser entregues como áudio pela voz Xavier; o comportamento pode ser desativado com `TELEGRAM_VOICE_REPLY_ENABLED=false`. A resposta textual continua sendo enviada mesmo que a síntese de voz falhe.
 
-Solicitações que possam conectar MCP, chamar sistemas externos, publicar, enviar, excluir, agendar ou gerar custos não são executadas silenciosamente. O Xavier cria uma solicitação privada na fila de ações e pede um código de aprovação explícita. O usuário pode responder `aprovar XAV-XXXXXXXX` ou `cancelar XAV-XXXXXXXX`; o código só é válido dentro da conta correspondente. PDFs e apresentações locais continuam podendo ser gerados diretamente, enquanto integrações externas dependem de um provedor autorizado e configurado no ambiente.
+Solicitações que possam conectar MCP, chamar sistemas externos, publicar, enviar, excluir, agendar ou gerar custos não são executadas silenciosamente. O Xavier cria uma solicitação privada na fila de ações e pede um código de aprovação explícita. O usuário pode responder `aprovar XAV-XXXXXXXX` ou `cancelar XAV-XXXXXXXX`; o código só é válido dentro da conta correspondente. PDF, PPTX, DOCX, XLSX e SVG podem ser materializados localmente e enviados como arquivos reais. Code Execution da Claude pode ser habilitado com `XAVIER_CLAUDE_CODE_EXECUTION=true` para aproveitar arquivos gerados pelo modelo. Vídeo, imagem raster e integrações externas dependem de um provedor especializado autorizado e configurado; o Xavier não simula um MP4 nem declara que uma imagem externa foi gerada quando isso não ocorreu.
 
 ---
 
@@ -139,11 +139,11 @@ O cadastro local permanece como fallback operacional controlado, enquanto o ecos
 | Memória por usuário | Operacional |
 | Voz e interação por áudio | Operacional |
 | Telegram individual | Operacional |
-| PDF e apresentações | Operacional |
+| PDF, PPTX, DOCX, XLSX e SVG | Operacional; arquivos binários reais com links temporários |
 | CRM invisível | Operacional |
 | Observabilidade econômica | Fundação aplicada |
 | Bot Telegram oficial multiusuário | Operacional; vínculo por código único e QR Code |
-| Claude Fable no web e Telegram | Integrado com fallback configurável |
+| Claude Fable no web e Telegram | Integrado com fallback configurável e Code Execution opcional |
 | Voz de entrada e resposta no Telegram | Integrada; retorno vocal opcional por variável de ambiente |
 | Aprovação de ações externas | Integrada; fila persistente e isolada por usuário |
 | Idiomas PT, EN e ES | Operacional no login e cockpit |
