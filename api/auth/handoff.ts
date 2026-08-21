@@ -102,7 +102,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify({
         type: "magiclink",
         email: payload.email,
-        options: { redirect_to: redirectTo },
+        redirect_to: redirectTo,
       }),
     });
     if (!response.ok) {
