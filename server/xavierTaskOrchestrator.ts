@@ -132,7 +132,7 @@ function rawActionError(error: unknown): string {
 
 export function formatXavierActionFailure(error: unknown): string {
   const raw = rawActionError(error);
-  const normalized = raw.toLowerCase();
+  const normalized = normalize(raw);
   if (/runway.*(?:401|403)|(?:401|403).*runway|unauthori[sz]ed|forbidden|invalid.*(?:api|secret).*key/.test(normalized)) {
     return "A chave do Runway foi rejeitada. Verifique a RUNWAY_API_SECRET no projeto Vercel do Xavier e publique um novo deployment.";
   }
