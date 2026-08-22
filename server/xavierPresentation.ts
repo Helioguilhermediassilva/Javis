@@ -13,9 +13,10 @@ const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-
 const SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
-const MAX_EMBED_IMAGE_BYTES = 1.5 * 1024 * 1024;
-const MAX_EMBED_IMAGE_WIDTH = 1_600;
-const MAX_EMBED_IMAGE_HEIGHT = 900;
+const MAX_EMBED_IMAGE_BYTES = 900 * 1024;
+const MAX_EMBED_IMAGE_WIDTH = 1_280;
+const MAX_EMBED_IMAGE_HEIGHT = 720;
+const MAX_PRESENTATION_IMAGE_COUNT = 6;
 const CONFIGURED_PRESENTATION_SIZE = Number(process.env.XAVIER_PRESENTATION_MAX_BYTES || 19 * 1024 * 1024);
 const MAX_PRESENTATION_SIZE = Number.isFinite(CONFIGURED_PRESENTATION_SIZE) && CONFIGURED_PRESENTATION_SIZE > 0
   ? Math.min(MAX_FILE_SIZE - 1024 * 1024, Math.max(4 * 1024 * 1024, CONFIGURED_PRESENTATION_SIZE))
@@ -192,33 +193,31 @@ async function imageUrlToDataUri(url: string): Promise<string> {
     throw new Error(`Formato de imagem não suportado no PPTX: ${headerType || "desconhecido"}`);
   }
 
-  const source = sharp(bytes, { animated: false }).resize({
-    width: MAX_EMBED_IMAGE_WIDTH,
-    height: MAX_EMBED_IMAGE_HEIGHT,
-    fit: "inside",
-    withoutEnlargement: true,
-  });
-  let output: Buffer;
-  let mime = "image/jpeg";
-  if (metadata.hasAlpha) {
-    output = await source.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true, quality: 80 }).toBuffer();
-    mime = "image/png";
-    if (output.length > MAX_EMBED_IMAGE_BYTES) {
-      output = await source.flatten({ background: "#FFFFFF" }).jpeg({ quality: 76, progressive: true, mozjpeg: true }).toBuffer();
-      mime = "image/jpeg";
+  const bounds = [
+    [MAX_EMBED_IMAGE_WIDTH, MAX_EMBED_IMAGE_HEIGHT],
+    [1_024, 576],
+    [800, 450],
+  ] as const;
+  const qualities = [78, 58, 42, 30] as const;
+
+  for (const [width, height] of bounds) {
+    const resized = () => sharp(bytes, { animated: false }).resize({
+      width,
+      height,
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+    if (metadata.hasAlpha) {
+      const png = await resized().png({ compressionLevel: 9, adaptiveFiltering: true, palette: true, quality: 76 }).toBuffer();
+      if (png.length <= MAX_EMBED_IMAGE_BYTES) return `data:image/png;base64,${png.toString("base64")}`;
     }
-  } else {
-    output = await source.jpeg({ quality: 82, progressive: true, mozjpeg: true }).toBuffer();
+    for (const quality of qualities) {
+      const jpeg = await resized().flatten({ background: "#FFFFFF" }).jpeg({ quality, progressive: true, mozjpeg: true }).toBuffer();
+      if (jpeg.length <= MAX_EMBED_IMAGE_BYTES) return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+    }
   }
 
-  if (output.length > MAX_EMBED_IMAGE_BYTES) {
-    output = await sharp(output).jpeg({ quality: 68, progressive: true, mozjpeg: true }).toBuffer();
-    mime = "image/jpeg";
-  }
-  if (!output.length || output.length > MAX_EMBED_IMAGE_BYTES) {
-    throw new Error(`A imagem otimizada da apresentação excede ${formatBytes(MAX_EMBED_IMAGE_BYTES)}`);
-  }
-  return `data:${mime};base64,${output.toString("base64")}`;
+  throw new Error(`A imagem otimizada da apresentação excede ${formatBytes(MAX_EMBED_IMAGE_BYTES)}`);
 }
 
 function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance["addSlide"]>, index: number): void {
@@ -229,7 +228,7 @@ function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance[
 
 export async function renderXavierPresentationBuffer(title: string, outline: string, imageUrls: string[] = []): Promise<Buffer> {
   const parsed = parsePresentationOutline(outline, title);
-  const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url)))).slice(0, 10);
+  const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url)))).slice(0, MAX_PRESENTATION_IMAGE_COUNT);
   const imageData = await Promise.all(normalizedImageUrls.map((url) => imageUrlToDataUri(url)));
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
@@ -261,7 +260,10 @@ export async function renderXavierPresentationBuffer(title: string, outline: str
       bullets.map((text) => ({ text, options: { bullet: { indent: 18 }, hanging: 4, breakLine: true } })),
       { x: 0.9, y: 1.65, w: imageData.length ? 7.0 : 11.4, h: 4.9, fontFace: "Aptos", fontSize: 17, color: "1B3340", breakLine: false, paraSpaceAfter: 14, valign: "middle", margin: 0.04, fit: "shrink" },
     );
-    const slideImage = imageData[(index + 1) % imageData.length];
+    // Cada imagem é incorporada no máximo uma vez no deck: a primeira na capa
+    // e as seguintes nos primeiros slides. Repetir a mídia em todos os slides
+    // multiplica o PPTX sem melhorar a experiência visual.
+    const slideImage = index < imageData.length - 1 ? imageData[index + 1] : undefined;
     if (slideImage) slide.addImage({ data: slideImage, x: 8.35, y: 1.55, w: 4.15, h: 4.35 });
     addFooter(pptx, slide, index + 2);
   });
