@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import { createXavierPresentationAttachment, renderXavierPresentationBuffer } from "./xavierPresentation.js";
@@ -70,8 +69,14 @@ describe("renderXavierPresentationBuffer", () => {
   });
 
   it("não duplica imagens em todos os slides quando o deck recebe várias referências", async () => {
-    const raw = randomBytes(1_280 * 720 * 3);
-    const jpeg = await sharp(raw, { raw: { width: 1_280, height: 720, channels: 3 } }).jpeg({ quality: 95 }).toBuffer();
+    const jpeg = await sharp({
+      create: {
+        width: 1_280,
+        height: 720,
+        channels: 3,
+        background: { r: 20, g: 184, b: 166 },
+      },
+    }).jpeg({ quality: 95 }).toBuffer();
     const fetchMock = vi.fn(async () => new Response(jpeg, {
       status: 200,
       headers: {
@@ -89,10 +94,13 @@ describe("renderXavierPresentationBuffer", () => {
         "https://example.com/two.jpg",
         "https://example.com/three.jpg",
         "https://example.com/four.jpg",
+        "https://example.com/five.jpg",
+        "https://example.com/six.jpg",
+        "https://example.com/seven.jpg",
       ],
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
     expect(pptx.subarray(0, 2).toString()).toBe("PK");
     expect(pptx.length).toBeLessThan(5 * 1024 * 1024);
   });
@@ -101,6 +109,7 @@ describe("renderXavierPresentationBuffer", () => {
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key");
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 409 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ statusCode: "413", code: "EntityTooLarge" }), { status: 413 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -110,9 +119,10 @@ describe("renderXavierPresentationBuffer", () => {
       taskId: "task-1",
       title: "Apresentação",
       outline: "# Apresentação\n\n## Visão geral\n- Conteúdo",
-    })).rejects.toThrow("tamanho acima do limite do bucket");
+    })).rejects.toThrow("limite técnico deste arquivo");
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[2]?.[0]).toContain("/storage/v1/object/remove");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls[1]?.[0]).toContain("/storage/v1/bucket/xavier-presentations");
+    expect(fetchMock.mock.calls[3]?.[0]).toContain("/storage/v1/object/remove");
   });
 });

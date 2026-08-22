@@ -9,18 +9,17 @@ const PptxGenJS = (typeof pptxGenJsModule === "function" ? pptxGenJsModule : ppt
 type PptxGenJsInstance = InstanceType<PptxGenJsConstructor>;
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
-const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 100) || "xavier-files";
+const BUCKET = (process.env.XAVIER_PRESENTATIONS_BUCKET || "xavier-presentations").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 100) || "xavier-presentations";
 const SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
+const PRESENTATION_BUCKET_LIMIT_BYTES = 512 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_EMBED_IMAGE_BYTES = 900 * 1024;
 const MAX_EMBED_IMAGE_WIDTH = 1_280;
 const MAX_EMBED_IMAGE_HEIGHT = 720;
-const MAX_PRESENTATION_IMAGE_COUNT = 6;
-const CONFIGURED_PRESENTATION_SIZE = Number(process.env.XAVIER_PRESENTATION_MAX_BYTES || 19 * 1024 * 1024);
+const CONFIGURED_PRESENTATION_SIZE = Number(process.env.XAVIER_PRESENTATION_APP_MAX_BYTES || 0);
 const MAX_PRESENTATION_SIZE = Number.isFinite(CONFIGURED_PRESENTATION_SIZE) && CONFIGURED_PRESENTATION_SIZE > 0
-  ? Math.min(MAX_FILE_SIZE - 1024 * 1024, Math.max(4 * 1024 * 1024, CONFIGURED_PRESENTATION_SIZE))
-  : MAX_FILE_SIZE - 1024 * 1024;
+  ? CONFIGURED_PRESENTATION_SIZE
+  : 0;
 
 export interface XavierGeneratedPresentationAttachment {
   file_name: string;
@@ -60,19 +59,38 @@ function adminHeaders(contentType = "application/json"): Headers {
   });
 }
 
+async function updateBucketLimit(): Promise<void> {
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/bucket/${BUCKET}`, {
+    method: "PUT",
+    headers: adminHeaders(),
+    body: JSON.stringify({ public: false, file_size_limit: PRESENTATION_BUCKET_LIMIT_BYTES }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (response.ok) return;
+  const detail = (await response.text().catch(() => "")).slice(0, 300);
+  throw new Error(`Supabase storage bucket update ${response.status}: ${detail}`);
+}
+
 async function ensureBucket(): Promise<void> {
   const response = await fetch(`${SUPABASE_URL}/storage/v1/bucket`, {
     method: "POST",
     headers: adminHeaders(),
-    body: JSON.stringify({ id: BUCKET, name: BUCKET, public: false, file_size_limit: MAX_FILE_SIZE }),
+    body: JSON.stringify({ id: BUCKET, name: BUCKET, public: false, file_size_limit: PRESENTATION_BUCKET_LIMIT_BYTES }),
     signal: AbortSignal.timeout(8_000),
   });
   const detail = await response.text().catch(() => "");
-  if (response.ok || response.status === 409) return;
+  if (response.ok) return;
+  if (response.status === 409) {
+    await updateBucketLimit();
+    return;
+  }
   if (response.status === 400) {
     try {
       const payload = JSON.parse(detail) as { code?: string; message?: string; statusCode?: string | number };
-      if (payload.code === "BucketAlreadyExists" || String(payload.statusCode) === "409" || /already exists|ja existe|já existe/i.test(payload.message || "")) return;
+      if (payload.code === "BucketAlreadyExists" || String(payload.statusCode) === "409" || /already exists|ja existe|já existe/i.test(payload.message || "")) {
+        await updateBucketLimit();
+        return;
+      }
     } catch {
       // Mantém o erro original quando a resposta não for JSON.
     }
@@ -89,12 +107,12 @@ async function uploadPresentation(path: string, content: Buffer): Promise<void> 
       "cache-control": "86400",
     }),
     body: content,
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(60_000),
   });
   if (response.ok) return;
   const detail = (await response.text().catch(() => "")).slice(0, 300);
   if (response.status === 413 || /payload too large|entitytoolarge|exceeded the maximum allowed size/i.test(detail)) {
-    throw new Error("O armazenamento recusou a apresentação por tamanho acima do limite do bucket");
+    throw new Error("O armazenamento atingiu o limite técnico deste arquivo; nenhuma cobrança foi feita");
   }
   throw new Error(`Supabase storage upload ${response.status}: ${detail}`);
 }
@@ -228,7 +246,7 @@ function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance[
 
 export async function renderXavierPresentationBuffer(title: string, outline: string, imageUrls: string[] = []): Promise<Buffer> {
   const parsed = parsePresentationOutline(outline, title);
-  const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url)))).slice(0, MAX_PRESENTATION_IMAGE_COUNT);
+  const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url))));
   const imageData = await Promise.all(normalizedImageUrls.map((url) => imageUrlToDataUri(url)));
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
@@ -280,8 +298,8 @@ export async function createXavierPresentationAttachment(input: {
   imageUrls?: string[];
 }): Promise<XavierGeneratedPresentationAttachment> {
   const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || []);
-  if (pptx.length > MAX_PRESENTATION_SIZE) {
-    throw new Error(`A apresentação otimizada ficou grande demais (${formatBytes(pptx.length)}); reduza a quantidade de imagens e tente novamente`);
+  if (MAX_PRESENTATION_SIZE > 0 && pptx.length > MAX_PRESENTATION_SIZE) {
+    throw new Error(`A apresentação excedeu o limite técnico configurado (${formatBytes(MAX_PRESENTATION_SIZE)}); nenhuma cobrança foi feita`);
   }
   await ensureBucket();
   const userPart = storageSafePart(input.userId, "user");
