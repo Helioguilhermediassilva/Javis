@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { creditBlockedMessage, creditLowBalanceMessage, estimateXavierCreditUnits, getXavierCreditsUrl } from "./xavierCredits.js";
+import { deriveXavierActionMetadata } from "./xavierTaskOrchestrator.js";
 import type { XavierActionRequest } from "./xavierTaskOrchestrator.js";
 
 function action(overrides: Partial<XavierActionRequest> = {}): XavierActionRequest {
@@ -28,15 +29,40 @@ function action(overrides: Partial<XavierActionRequest> = {}): XavierActionReque
 }
 
 describe("xavierCredits", () => {
-  it("estima mais unidades para apresentação visual do que para texto simples", () => {
-    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Criar apresentação", metadata: {} })).toBe(120);
-    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Adicionar imagens", metadata: { visual_presentation: true, image_count: 3 } })).toBe(1700);
+  it("aplica a política v3 para apresentação nova e refinamento visual", () => {
+    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Criar apresentação", metadata: {} })).toBe(8);
+    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Adicionar imagens", metadata: { visual_presentation: true, image_count: 3 } })).toBe(30);
+    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Refinar apresentação", metadata: { visual_presentation: true, image_count: 3, refinement: true } })).toBe(20);
+  });
+
+  it("deriva refinamento e imagens novas de um pedido natural", () => {
+    const metadata = deriveXavierActionMetadata("Agora adicione algumas imagens e deixe a apresentação mais elaborada", {}, "presentation");
+    expect(metadata.visual_presentation).toBe(true);
+    expect(metadata.refinement).toBe(true);
+    expect(metadata.new_image_count).toBe(3);
+    expect(estimateXavierCreditUnits({ kind: "presentation", requestText: "Agora adicione algumas imagens e deixe a apresentação mais elaborada", metadata })).toBe(20);
+  });
+
+  it("mantém custos pequenos para arquivos e mídia curta", () => {
+    expect(estimateXavierCreditUnits({ kind: "document", requestText: "Criar documento", metadata: {} })).toBe(4);
+    expect(estimateXavierCreditUnits({ kind: "pdf", requestText: "Criar PDF", metadata: {} })).toBe(4);
+    expect(estimateXavierCreditUnits({ kind: "spreadsheet", requestText: "Criar planilha", metadata: {} })).toBe(5);
+    expect(estimateXavierCreditUnits({ kind: "image", requestText: "Criar imagem", metadata: {} })).toBe(8);
+    expect(estimateXavierCreditUnits({ kind: "video", requestText: "Criar vídeo", metadata: { duration_seconds: 5 } })).toBe(40);
+    expect(estimateXavierCreditUnits({ kind: "video", requestText: "Criar vídeo", metadata: { duration_seconds: 10 } })).toBe(65);
   });
 
   it("produz mensagem acionável quando a franquia é insuficiente", () => {
-    const message = creditBlockedMessage(action({ metadata: { credit_blocked: true, credit_required_units: 1700, credit_available_units: 100 } }));
-    expect(message).toContain("1.700 créditos");
-    expect(message).toContain("100 disponíveis");
+    const message = creditBlockedMessage(action({ metadata: { credit_blocked: true, credit_required_units: 30, credit_available_units: 10 } }));
+    expect(message).toContain("30 créditos");
+    expect(message).toContain("10 disponíveis");
+    expect(message).toContain("nowgoai.com");
+  });
+
+  it("mantém a mensagem de bloqueio acionável para qualquer reserva", () => {
+    const message = creditBlockedMessage(action({ metadata: { credit_blocked: true, credit_required_units: 100, credit_available_units: 0 } }));
+    expect(message).toContain("100 créditos");
+    expect(message).toContain("0 disponíveis");
     expect(message).toContain("nowgoai.com");
   });
 

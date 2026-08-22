@@ -328,6 +328,31 @@ export function approvalPrompt(action: Pick<XavierActionRequest, "id" | "approva
   return `A ação “${action.title}” está pronta para execução, mas pode afetar um serviço externo ou gerar custos. Para autorizar explicitamente, responda “aprovar ${action.approval_code}”. Para cancelar, responda “cancelar ${action.approval_code}”. Solicitação: ${action.request_text.slice(0, 500)}`;
 }
 
+const VISUAL_REQUEST_PATTERN = /\b(?:imagem|imagens|foto|fotos|visual|visuais|ilustracao|ilustrações|grafico|graficos|capa|figura|arte)\b/i;
+const REFINEMENT_REQUEST_PATTERN = /\b(?:adicionar|adicione|acrescentar|acrescente|incluir|inclua|editar|edite|alterar|altere|ajustar|ajuste|refinar|refine|melhorar|melhore|revisar|revise|atualizar|atualize|mudar|mude|trocar|troque|corrigir|corrija|deixar|deixe|transformar|transforme)\b/i;
+
+function detectRequestedImageCount(requestText: string, metadata: Record<string, unknown>): number | undefined {
+  const supplied = Number(metadata.new_image_count ?? metadata.image_count);
+  if (Number.isFinite(supplied) && supplied >= 0) return Math.min(6, Math.floor(supplied));
+  if (!VISUAL_REQUEST_PATTERN.test(requestText)) return undefined;
+  if (/\b(?:uma|um|1)\s+(?:nova?\s+)?(?:imagem|foto|figura)\b/i.test(requestText)) return 1;
+  if (/\b(?:duas|dois|2)\s+(?:novas?\s+)?(?:imagens?|fotos?|figuras?)\b/i.test(requestText)) return 2;
+  if (/\b(?:tres|três|3)\s+(?:novas?\s+)?(?:imagens?|fotos?|figuras?)\b/i.test(requestText)) return 3;
+  if (/\b(?:quatro|4)\s+(?:novas?\s+)?(?:imagens?|fotos?|figuras?)\b/i.test(requestText)) return 4;
+  return 3;
+}
+
+export function deriveXavierActionMetadata(requestText: string, metadata: Record<string, unknown>, kind: XavierTaskKind): Record<string, unknown> {
+  const derived = { ...metadata };
+  const isVisualPresentation = kind === "presentation" && VISUAL_REQUEST_PATTERN.test(requestText);
+  const isRefinement = Boolean(derived.refinement || derived.is_refinement || derived.refine_existing_artifact || derived.artifact_refinement) || REFINEMENT_REQUEST_PATTERN.test(requestText);
+  const imageCount = kind === "presentation" ? detectRequestedImageCount(requestText, derived) : undefined;
+  if (isVisualPresentation) derived.visual_presentation = true;
+  if (isRefinement) derived.refinement = true;
+  if (imageCount !== undefined) derived.new_image_count = imageCount;
+  return derived;
+}
+
 export async function createXavierActionRequest(input: {
   userId: string;
   channel: XavierTaskChannel;
@@ -360,9 +385,8 @@ export async function createXavierActionRequest(input: {
       status: intent.requiresApproval ? "pending_approval" : "queued",
       approval_code: approvalCode,
       metadata: {
-        ...cleanJsonObject(input.metadata),
+        ...deriveXavierActionMetadata(requestText, cleanJsonObject(input.metadata), intent.kind),
         execution: intent.execution,
-        ...(intent.kind === "presentation" && /\b(?:imagem|imagens|foto|fotos|visual|visuais|ilustracao|ilustracao|grafico|graficos|capa|figura|arte)\b/i.test(requestText) ? { visual_presentation: true } : {}),
       },
     }),
   });

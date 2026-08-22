@@ -63,18 +63,43 @@ export function getXavierCreditsUrl(): string {
   return /^https:\/\//i.test(CREDITS_URL) ? CREDITS_URL : "https://www.nowgoai.com/#pricing";
 }
 
+function configuredUnits(name: string, fallback: number): number {
+  const configured = Number(process.env[name]);
+  return Number.isFinite(configured) && configured >= 0 ? Math.floor(configured) : fallback;
+}
+
+function metadataNumber(metadata: Record<string, unknown>, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = Number(metadata[key]);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return null;
+}
+
 export function estimateXavierCreditUnits(input: { kind: XavierTaskKind; requestText: string; metadata?: Record<string, unknown> }): number {
   const text = input.requestText.toLowerCase();
-  const hasVisualPresentation = input.kind === "presentation" && Boolean(input.metadata?.visual_presentation);
-  const imageCount = Math.min(12, Math.max(1, Number(input.metadata?.image_count) || (hasVisualPresentation ? 3 : 1)));
-  if (input.kind === "video") return 1_500;
-  if (input.kind === "image") return 300;
-  if (hasVisualPresentation) return 800 + imageCount * 300;
-  if (input.kind === "presentation") return 120;
-  if (input.kind === "document" || input.kind === "pdf") return 100;
-  if (input.kind === "spreadsheet") return 120;
-  if (input.kind === "system" || input.kind === "mcp" || input.kind === "external") return 500;
-  return text.length > 4_000 ? 150 : 80;
+  const metadata = input.metadata || {};
+  const hasVisualPresentation = input.kind === "presentation" && Boolean(metadata.visual_presentation);
+  const isRefinement = Boolean(metadata.refinement || metadata.is_refinement || metadata.refine_existing_artifact || metadata.artifact_refinement);
+  const requestedImageCount = metadataNumber(metadata, "image_count", "new_image_count");
+  const imageCount = Math.min(6, Math.max(0, Math.floor(requestedImageCount ?? (hasVisualPresentation ? 3 : 0))));
+
+  if (input.kind === "video") {
+    const durationSeconds = metadataNumber(metadata, "duration_seconds", "durationSeconds", "video_duration_seconds") || 5;
+    const blocks = Math.max(1, Math.ceil(durationSeconds / 5));
+    return configuredUnits("XAVIER_CREDIT_VIDEO_FIRST_5_SECONDS", 40) + (blocks - 1) * configuredUnits("XAVIER_CREDIT_VIDEO_ADDITIONAL_5_SECONDS", 25);
+  }
+  if (input.kind === "image") return configuredUnits("XAVIER_CREDIT_IMAGE_UNITS", 8);
+  if (hasVisualPresentation) {
+    const base = configuredUnits(isRefinement ? "XAVIER_CREDIT_PRESENTATION_REFINEMENT_BASE_UNITS" : "XAVIER_CREDIT_PRESENTATION_VISUAL_BASE_UNITS", isRefinement ? 2 : 12);
+    const perImage = configuredUnits("XAVIER_CREDIT_PRESENTATION_IMAGE_UNITS", 6);
+    return base + imageCount * perImage;
+  }
+  if (input.kind === "presentation") return configuredUnits("XAVIER_CREDIT_PRESENTATION_UNITS", 8);
+  if (input.kind === "document" || input.kind === "pdf") return configuredUnits("XAVIER_CREDIT_DOCUMENT_UNITS", 4);
+  if (input.kind === "spreadsheet") return configuredUnits("XAVIER_CREDIT_SPREADSHEET_UNITS", 5);
+  if (input.kind === "system" || input.kind === "mcp" || input.kind === "external") return configuredUnits("XAVIER_CREDIT_EXTERNAL_ACTION_UNITS", 500);
+  return text.length > 4_000 ? configuredUnits("XAVIER_CREDIT_LONG_TEXT_UNITS", 2) : configuredUnits("XAVIER_CREDIT_DEFAULT_UNITS", 2);
 }
 
 export async function reserveXavierCredits(input: {
@@ -102,7 +127,7 @@ export async function reserveXavierCredits(input: {
       p_action_id: input.action.id,
       p_units: requiredUnits,
       p_idempotency_key: `reserve:${input.action.id}`,
-      p_metadata: { kind: input.action.kind, estimate_version: "2026-08-22-1" },
+      p_metadata: { kind: input.action.kind, estimate_version: process.env.XAVIER_CREDIT_ESTIMATE_VERSION || "2026-08-22-3" },
     });
     const result = reserved[0];
     if (!result?.ok || !result.reservation_id) return { enabled: true, ok: false, reason: result?.reason || "reservation_failed", requiredUnits, availableUnits: result?.available_units || availableUnits };
