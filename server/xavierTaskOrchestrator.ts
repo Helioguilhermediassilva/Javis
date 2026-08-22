@@ -145,6 +145,9 @@ export function formatXavierActionFailure(error: unknown): string {
   if (/runway.*(?:timeout|timed out|excedeu o tempo)|(?:timeout|timed out|excedeu o tempo).*runway/.test(normalized)) {
     return "O Runway demorou além do limite para concluir a mídia. A ação foi encerrada sem nova tentativa automática; tente novamente em alguns instantes.";
   }
+  if (/413|payload too large|entitytoolarge|tamanho acima do limite|maximum allowed size/.test(normalized) && /imagem da apresentação|pptx|apresenta(?:ção|cao)|storage|upload/.test(normalized)) {
+    return "A mídia foi autorizada, mas a apresentação ficou maior que o limite seguro de armazenamento. A ação foi encerrada sem nova cobrança; tente novamente com menos imagens ou imagens mais simples.";
+  }
   if (/imagem da apresentação|pptx|apresenta(?:ção|cao)|supabase media|storage|signed url|download de mídia|formato de imagem/.test(normalized)) {
     return `A mídia foi autorizada, mas não foi possível compor ou armazenar a apresentação. ${raw ? `Detalhe técnico: ${raw.slice(0, 300)}` : "Tente novamente em alguns instantes."}`;
   }

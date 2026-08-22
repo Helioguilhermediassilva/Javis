@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import sharp from "sharp";
+import sharp, { type Metadata } from "sharp";
 import { getSupabaseAdminKey } from "./supabaseAdmin.js";
 
 const require = createRequire(import.meta.url);
@@ -13,6 +13,13 @@ const BUCKET = (process.env.XAVIER_FILES_BUCKET || "xavier-files").replace(/[^a-
 const SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
+const MAX_EMBED_IMAGE_BYTES = 1.5 * 1024 * 1024;
+const MAX_EMBED_IMAGE_WIDTH = 1_600;
+const MAX_EMBED_IMAGE_HEIGHT = 900;
+const CONFIGURED_PRESENTATION_SIZE = Number(process.env.XAVIER_PRESENTATION_MAX_BYTES || 19 * 1024 * 1024);
+const MAX_PRESENTATION_SIZE = Number.isFinite(CONFIGURED_PRESENTATION_SIZE) && CONFIGURED_PRESENTATION_SIZE > 0
+  ? Math.min(MAX_FILE_SIZE - 1024 * 1024, Math.max(4 * 1024 * 1024, CONFIGURED_PRESENTATION_SIZE))
+  : MAX_FILE_SIZE - 1024 * 1024;
 
 export interface XavierGeneratedPresentationAttachment {
   file_name: string;
@@ -83,7 +90,24 @@ async function uploadPresentation(path: string, content: Buffer): Promise<void> 
     body: content,
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`Supabase storage upload ${response.status}: ${(await response.text()).slice(0, 300)}`);
+  if (response.ok) return;
+  const detail = (await response.text().catch(() => "")).slice(0, 300);
+  if (response.status === 413 || /payload too large|entitytoolarge|exceeded the maximum allowed size/i.test(detail)) {
+    throw new Error("O armazenamento recusou a apresentação por tamanho acima do limite do bucket");
+  }
+  throw new Error(`Supabase storage upload ${response.status}: ${detail}`);
+}
+
+async function removeStoredObject(path: string): Promise<void> {
+  const response = await fetch(`${SUPABASE_URL}/storage/v1/object/remove`, {
+    method: "POST",
+    headers: adminHeaders(),
+    body: JSON.stringify({ prefixes: [path] }),
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok && response.status !== 404) {
+    console.warn("[xavier-presentation] could not remove partial object", { path, status: response.status });
+  }
 }
 
 async function signedUrl(path: string): Promise<string> {
@@ -135,6 +159,11 @@ function parsePresentationOutline(outline: string, fallbackTitle: string): { tit
   };
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.ceil(bytes / 1024)} KB`;
+}
+
 async function imageUrlToDataUri(url: string): Promise<string> {
   if (!/^https:\/\//i.test(url)) throw new Error("A imagem da apresentação precisa usar uma URL HTTPS");
   const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
@@ -145,14 +174,14 @@ async function imageUrlToDataUri(url: string): Promise<string> {
   if (!bytes.length || bytes.length > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação está vazia ou excede 8 MB");
 
   const headerType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
-  let detectedFormat: string | undefined;
+  let metadata: Metadata;
   try {
-    detectedFormat = (await sharp(bytes, { animated: false }).metadata()).format;
+    metadata = await sharp(bytes, { animated: false }).metadata();
   } catch {
-    detectedFormat = undefined;
+    throw new Error(`Formato de imagem não suportado no PPTX: ${headerType || "desconhecido"}`);
   }
 
-  const format = detectedFormat || ({
+  const format = metadata.format || ({
     "image/png": "png",
     "image/jpeg": "jpeg",
     "image/jpg": "jpeg",
@@ -163,13 +192,32 @@ async function imageUrlToDataUri(url: string): Promise<string> {
     throw new Error(`Formato de imagem não suportado no PPTX: ${headerType || "desconhecido"}`);
   }
 
-  let output = bytes;
-  let mime = format === "jpeg" ? "image/jpeg" : `image/${format}`;
-  if (format === "webp" || format === "gif") {
-    output = await sharp(bytes, { animated: false }).png().toBuffer();
+  const source = sharp(bytes, { animated: false }).resize({
+    width: MAX_EMBED_IMAGE_WIDTH,
+    height: MAX_EMBED_IMAGE_HEIGHT,
+    fit: "inside",
+    withoutEnlargement: true,
+  });
+  let output: Buffer;
+  let mime = "image/jpeg";
+  if (metadata.hasAlpha) {
+    output = await source.png({ compressionLevel: 9, adaptiveFiltering: true, palette: true, quality: 80 }).toBuffer();
     mime = "image/png";
+    if (output.length > MAX_EMBED_IMAGE_BYTES) {
+      output = await source.flatten({ background: "#FFFFFF" }).jpeg({ quality: 76, progressive: true, mozjpeg: true }).toBuffer();
+      mime = "image/jpeg";
+    }
+  } else {
+    output = await source.jpeg({ quality: 82, progressive: true, mozjpeg: true }).toBuffer();
   }
-  if (!output.length || output.length > MAX_IMAGE_SIZE) throw new Error("A imagem normalizada da apresentação excede 8 MB");
+
+  if (output.length > MAX_EMBED_IMAGE_BYTES) {
+    output = await sharp(output).jpeg({ quality: 68, progressive: true, mozjpeg: true }).toBuffer();
+    mime = "image/jpeg";
+  }
+  if (!output.length || output.length > MAX_EMBED_IMAGE_BYTES) {
+    throw new Error(`A imagem otimizada da apresentação excede ${formatBytes(MAX_EMBED_IMAGE_BYTES)}`);
+  }
   return `data:${mime};base64,${output.toString("base64")}`;
 }
 
@@ -230,15 +278,22 @@ export async function createXavierPresentationAttachment(input: {
   imageUrls?: string[];
 }): Promise<XavierGeneratedPresentationAttachment> {
   const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || []);
-  if (pptx.length > MAX_FILE_SIZE) throw new Error("Apresentação gerada excede o limite de 20 MB");
+  if (pptx.length > MAX_PRESENTATION_SIZE) {
+    throw new Error(`A apresentação otimizada ficou grande demais (${formatBytes(pptx.length)}); reduza a quantidade de imagens e tente novamente`);
+  }
   await ensureBucket();
   const userPart = storageSafePart(input.userId, "user");
   const taskPart = storageSafePart(input.taskId, "task");
   const path = `xavier/${userPart}/${taskPart}.pptx`;
-  await uploadPresentation(path, pptx);
-  return {
-    file_name: `${storageSafePart(input.title, "xavier-apresentacao")}.pptx`,
-    url: await signedUrl(path),
-    size_bytes: pptx.length,
-  };
+  try {
+    await uploadPresentation(path, pptx);
+    return {
+      file_name: `${storageSafePart(input.title, "xavier-apresentacao")}.pptx`,
+      url: await signedUrl(path),
+      size_bytes: pptx.length,
+    };
+  } catch (error) {
+    await removeStoredObject(path).catch(() => undefined);
+    throw error;
+  }
 }

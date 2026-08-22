@@ -46,5 +46,7 @@ describe("Xavier task orchestrator", () => {
     expect(formatXavierActionFailure(new Error("Runway 429 rate limit"))).toContain("limite de solicitações");
     expect(formatXavierActionFailure(new Error("Runway 401 invalid API key"))).toContain("chave do Runway foi rejeitada");
     expect(formatXavierActionFailure(new Error("PPTX image format unsupported"))).toContain("compor ou armazenar a apresentação");
+    expect(formatXavierActionFailure(new Error("Supabase storage upload 413: EntityTooLarge"))).toContain("menos imagens ou imagens mais simples");
+    expect(formatXavierActionFailure(new Error("Supabase storage upload 413: EntityTooLarge"))).not.toContain("EntityTooLarge");
   });
 });
