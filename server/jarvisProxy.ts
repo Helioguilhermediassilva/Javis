@@ -43,6 +43,15 @@ import { createXavierOfficeAttachment, type XavierGeneratedOfficeAttachment } fr
 import { getXavierRequestId, logXavierEvent, publicXavierError } from "./xavierObservability.js";
 import { recordXavierUsageEventDetached } from "./xavierTelemetry.js";
 import {
+  buildXavierLlmBody,
+  getXavierLlmRoute,
+  llmCompletionsUrl,
+  requestXavierLlmCompletion,
+  XavierLlmUpstreamError,
+  type XavierLlmCompletion,
+  type XavierLlmRoute,
+} from "./xavierOpenRouter.js";
+import {
   actionReadyMessage,
   approvalPrompt,
   approveXavierActionRequest,
@@ -421,7 +430,7 @@ export interface ChatPayload {
   attachments?: AttachmentRef[];
   active_file_id?: string;
   honorific?: "senhor" | "senhora";
-  engine?: "auto" | "grok" | "manus" | "claude";
+  engine?: "auto" | "grok" | "openrouter" | "manus" | "claude";
   locale?: SentimentLocale;
   country?: string;
   state?: string;
@@ -536,16 +545,37 @@ export class JarvisChatError extends Error {
   }
 }
 
+function toJarvisLlmError(error: unknown): JarvisChatError {
+  if (error instanceof JarvisChatError) return error;
+  if (error instanceof XavierLlmUpstreamError) {
+    if (error.status === 401 || error.status === 403) {
+      return new JarvisChatError(502, "A credencial do executor de IA está inválida ou sem permissão. A equipe deve revisar OPENROUTER_API_KEY no ambiente Production.");
+    }
+    if (error.status === 402) {
+      return new JarvisChatError(402, "O executor de IA está sem saldo técnico. A equipe deve recarregar o saldo OpenRouter; nenhum crédito do usuário foi debitado.");
+    }
+    if (error.status === 429) {
+      return new JarvisChatError(429, "O limite temporário do executor de IA foi atingido. Tente novamente em alguns instantes; nenhum crédito do usuário foi debitado.");
+    }
+    if (error.status === 503) {
+      return new JarvisChatError(503, "Nenhum endpoint de IA atende agora às preferências de disponibilidade e privacidade configuradas. Tente novamente em instantes.");
+    }
+    return new JarvisChatError(502, "O executor de IA não respondeu corretamente. Tente novamente em instantes.");
+  }
+  return new JarvisChatError(502, `Network error: ${(error as Error).message}`);
+}
+
 export interface JarvisChatResult {
   reply: string;
   tools_used: string[];
   timings: Array<{ round: number; llmMs: number; toolsMs: number; toolNames: string[] }>;
+  provider?: "openrouter" | "legacy";
+  model?: string;
 }
 
 export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisChatResult> {
-  const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
-  const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
-  if (!llmKey) throw new JarvisChatError(500, "LLM not configured on server");
+  const route = getXavierLlmRoute();
+  if (!route) throw new JarvisChatError(500, "Nenhum executor configurado no servidor. Configure OPENROUTER_API_KEY ou o gateway LLM legado.");
 
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
   const history = Array.isArray(payload.history) ? payload.history : [];
@@ -594,39 +624,22 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
     userTurn,
   ];
 
-  const callLlm = async (msgs: Array<Record<string, unknown>>) => {
-    const r = await fetch(`${llmBase}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${llmKey}` },
-      body: JSON.stringify({
-        model: "grok-4.3",
-        messages: msgs,
-        tools: JARVIS_TOOLS,
-        tool_choice: "auto",
-        temperature: 0.7,
-        max_tokens: 600,
-      }),
-      signal: AbortSignal.timeout(110_000),
-    });
-    const txt = await r.text();
-    return { ok: r.ok, status: r.status, text: txt };
-  };
+  const callLlm = async (msgs: Array<Record<string, unknown>>): Promise<XavierLlmCompletion> =>
+    requestXavierLlmCompletion(route, msgs, JARVIS_TOOLS);
 
   try {
     const usedTools: string[] = [];
     const roundTimings: Array<{ round: number; llmMs: number; toolsMs: number; toolNames: string[] }> = [];
     let convo = [...messages];
     let finalContent = "";
+    let selectedModel = route.model;
     for (let round = 0; round < 3; round++) {
       const tLlm0 = Date.now();
       const up = await callLlm(convo);
       const llmMs = Date.now() - tLlm0;
-      if (!up.ok) throw new JarvisChatError(502, `Upstream ${up.status}: ${up.text.slice(0, 300)}`);
-      let parsed: { choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } }> };
-      try { parsed = JSON.parse(up.text); } catch { throw new JarvisChatError(502, "Invalid upstream JSON"); }
-      const choice = parsed.choices?.[0]?.message;
-      if (!choice) throw new JarvisChatError(502, "Empty reply from upstream");
-      const toolCalls = choice.tool_calls || [];
+      selectedModel = up.model;
+      const choice = { content: up.content, tool_calls: up.toolCalls };
+      const toolCalls = choice.tool_calls;
       if (toolCalls.length === 0) {
         finalContent = (choice.content || "").trim();
         break;
@@ -652,10 +665,9 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
     if (roundTimings.some((r) => r.llmMs + r.toolsMs > 2000)) {
       console.log("[jarvis-chat] timings:", JSON.stringify(roundTimings));
     }
-    return { reply: finalContent, tools_used: usedTools, timings: roundTimings };
+    return { reply: finalContent, tools_used: usedTools, timings: roundTimings, provider: route.provider, model: selectedModel };
   } catch (e) {
-    if (e instanceof JarvisChatError) throw e;
-    throw new JarvisChatError(502, `Network error: ${(e as Error).message}`);
+    throw toJarvisLlmError(e);
   }
 }
 
@@ -969,7 +981,7 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     }
     const activeFile = await resolveActiveXavierFile(authenticatedPayload, context);
     const fileEditRequested = Boolean(activeFile && isFileEditRequest(authenticatedPayload.userMessage || "", true));
-    const claudeTask = fileEditRequested || (requestedEngine !== "grok" && (isClaudeConfigured() || shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine)));
+    const claudeTask = fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine)));
     if (claudeTask && (requestedEngine === "claude" || requestedEngine === "manus") && !isClaudeConfigured()) {
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
     }
@@ -1120,10 +1132,10 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       channel: "web",
       eventName: "chat_response",
       status: "success",
-      provider: "grok",
-      model: "grok-4.3",
+      provider: result.provider || "legacy",
+      model: result.model || "grok-4.3",
       latencyMs: Date.now() - startedAt,
-      metadata: { route: "chat_json", tools: result.tools_used.length },
+      metadata: { route: "chat_json", executor: result.provider || "legacy", tools: result.tools_used.length },
     });
     sendJson(res, 200, result);
   } catch (e) {
@@ -1185,33 +1197,25 @@ interface AccumulatedToolCall {
 }
 
 async function streamLlmRound(
-  llmBase: string,
-  llmKey: string,
+  route: XavierLlmRoute,
   msgs: Array<Record<string, unknown>>,
   onDelta: (text: string) => void,
-): Promise<{ content: string; toolCalls: AccumulatedToolCall[] }> {
-  const r = await fetch(`${llmBase}/v1/chat/completions`, {
+): Promise<{ content: string; toolCalls: AccumulatedToolCall[]; model: string }> {
+  const r = await fetch(llmCompletionsUrl(route), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${llmKey}` },
-    body: JSON.stringify({
-      model: "grok-4.3",
-      messages: msgs,
-      tools: JARVIS_TOOLS,
-      tool_choice: "auto",
-      temperature: 0.7,
-      max_tokens: 600,
-      stream: true,
-    }),
+    headers: route.headers,
+    body: JSON.stringify(buildXavierLlmBody(route, msgs, JARVIS_TOOLS, true)),
     signal: AbortSignal.timeout(110_000),
   });
   if (!r.ok || !r.body) {
     const errText = r.body ? await r.text() : "empty response";
-    throw new Error(`Upstream ${r.status}: ${errText.slice(0, 300)}`);
+    throw new XavierLlmUpstreamError(route.provider, r.status, `${route.provider} ${r.status}: ${errText.slice(0, 320)}`);
   }
   const reader = r.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buf = "";
   let content = "";
+  let selectedModel = route.model;
   const accTools: Map<number, { id: string; type: string; name: string; argsBuf: string }> = new Map();
   try {
     // eslint-disable-next-line no-constant-condition
@@ -1228,8 +1232,9 @@ async function streamLlmRound(
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
           if (!data || data === "[DONE]") continue;
-          let payload: { choices?: Array<{ delta?: LlmStreamDelta; finish_reason?: string }> };
+          let payload: { model?: string; choices?: Array<{ delta?: LlmStreamDelta; finish_reason?: string }> };
           try { payload = JSON.parse(data); } catch { continue; }
+          if (typeof payload.model === "string" && payload.model) selectedModel = payload.model;
           const delta = payload.choices?.[0]?.delta;
           if (!delta) continue;
           if (typeof delta.content === "string" && delta.content.length > 0) {
@@ -1260,7 +1265,7 @@ async function streamLlmRound(
       type: v.type || "function",
       function: { name: v.name, arguments: v.argsBuf || "{}" },
     }));
-  return { content, toolCalls };
+  return { content, toolCalls, model: selectedModel };
 }
 
 export async function handleJarvisChatStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1271,8 +1276,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     sendJson(res, 405, { error: "Method not allowed" });
     return;
   }
-  const llmBase = (process.env.LLM_API_URL || process.env.XAI_API_URL || "https://api.x.ai").replace(/\/+$/, "");
-  const llmKey = process.env.LLM_API_KEY || process.env.XAI_API_KEY || "";
+  const llmRoute = getXavierLlmRoute();
   let payload: ChatPayload;
   try {
     payload = (await readJsonBody(req)) as ChatPayload;
@@ -1416,7 +1420,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     try { res.end(); } catch {}
     return;
   }
-  const claudeTask = fileEditRequested || (requestedEngine !== "grok" && (isClaudeConfigured() || shouldUseClaudeTask(userMessage, requestedEngine)));
+  const claudeTask = fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(userMessage, requestedEngine)));
   if (claudeTask && (isClaudeConfigured() || requestedEngine === "claude" || requestedEngine === "manus")) {
     try {
       if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
@@ -1575,8 +1579,8 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     return;
   }
 
-  if (!llmKey) {
-    sseWrite(res, { type: "error", message: "Nenhum executor configurado no servidor" });
+  if (!llmRoute) {
+    sseWrite(res, { type: "error", message: "Nenhum executor configurado no servidor. Configure OPENROUTER_API_KEY ou o gateway LLM legado." });
     cleanup();
     try { res.end(); } catch {}
     return;
@@ -1631,10 +1635,12 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     const usedTools: string[] = [];
     let convo = [...messages];
     let finalContent = "";
+    let selectedModel = llmRoute.model;
     for (let round = 0; round < 3; round++) {
-      const { content, toolCalls } = await streamLlmRound(llmBase, llmKey, convo, (txt) => {
+      const { content, toolCalls, model: roundModel } = await streamLlmRound(llmRoute, convo, (txt) => {
         sseWrite(res, { type: "delta", text: txt });
       });
+      selectedModel = roundModel;
       if (toolCalls.length === 0) {
         finalContent = content.trim();
         break;
@@ -1663,10 +1669,10 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
         channel: "web",
         eventName: "chat_response",
         status: "success",
-        provider: "grok",
-        model: "grok-4.3",
+        provider: llmRoute.provider,
+        model: selectedModel,
         latencyMs: Date.now() - startedAt,
-        metadata: { route: "chat_stream", tools: usedTools.length },
+        metadata: { route: "chat_stream", executor: llmRoute.provider, tools: usedTools.length },
       });
       if (context.persist) {
         await appendXavierMessage({
@@ -1682,18 +1688,19 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
       }
       sseWrite(res, { type: "done", reply: finalContent, tools_used: usedTools });
     }
-  } catch (e) {
-    recordXavierUsageEventDetached({
-      userId: context.persist ? context.userId : null,
-      requestId,
-      channel: "web",
-      eventName: "chat_error",
-      status: "error",
-      latencyMs: Date.now() - startedAt,
-      metadata: { route: "chat_stream", executor: "grok" },
-    });
-    sseWrite(res, { type: "error", message: publicXavierError(502, (e as Error).message), request_id: requestId });
-  } finally {
+      } catch (e) {
+      const error = toJarvisLlmError(e);
+      recordXavierUsageEventDetached({
+        userId: context.persist ? context.userId : null,
+        requestId,
+        channel: "web",
+        eventName: "chat_error",
+        status: "error",
+        latencyMs: Date.now() - startedAt,
+        metadata: { route: "chat_stream", executor: llmRoute.provider, status: error.status },
+      });
+      sseWrite(res, { type: "error", message: publicXavierError(error.status, error.message), request_id: requestId });
+    } finally {
     cleanup();
     try { res.end(); } catch {}
   }

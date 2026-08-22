@@ -8,6 +8,8 @@ import {
   XAVIER_CLAUDE_SYSTEM_PROMPT,
 } from "../../server/xavierClaude.js";
 import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegramHistory.js";
+import { generateJarvisReply } from "../../server/jarvisProxy.js";
+import { isOpenRouterConfigured } from "../../server/xavierOpenRouter.js";
 import { downloadTelegramImage, extractTelegramAudioReference, extractTelegramImageReference, transcribeTelegramAudio, type TelegramImageReference } from "../../server/telegramAudio.js";
 import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
 import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
@@ -382,8 +384,8 @@ async function processPerUserTelegramMessage(input: {
       return;
     }
 
-    if (!isClaudeConfigured()) {
-      await sendXavierTelegramMessage(connection, chatId, "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
+    if (!isClaudeConfigured() && !isOpenRouterConfigured()) {
+      await sendXavierTelegramMessage(connection, chatId, "Senhor, nenhum executor de IA está configurado no servidor. A equipe deve configurar OPENROUTER_API_KEY ou ANTHROPIC_API_KEY no Vercel.");
       return;
     }
 
@@ -405,6 +407,10 @@ async function processPerUserTelegramMessage(input: {
       hasAudio: Boolean(audio),
     });
     if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
+      if (!isClaudeConfigured()) {
+        await sendXavierTelegramMessage(connection, chatId, "Senhor, esta tarefa de arquivo precisa do executor de documentos configurado. A equipe deve revisar ANTHROPIC_API_KEY no Vercel; nenhum crédito foi debitado.");
+        return;
+      }
       const attachment = requestIsPdf
         ? await createLocalXavierPdf({ userId: connection.user_id, taskId: `telegram-${connection.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
         : requestIsPresentation
@@ -451,14 +457,25 @@ async function processPerUserTelegramMessage(input: {
       return;
     }
 
-    const result = await generateClaudeReply({
-      history: previousHistory,
-      systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
-      userMessage: text,
-      useWebSearch: shouldUseWebSearchForRequest(text),
-      timeoutMs: claudeTimeoutMs,
-    });
-    const reply = appendClaudeCitations(result.reply, result.citations);
+    const researchRequested = shouldUseWebSearchForRequest(text);
+    let reply: string;
+    if (researchRequested || !isOpenRouterConfigured()) {
+      const result = await generateClaudeReply({
+        history: previousHistory,
+        systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+        userMessage: text,
+        useWebSearch: researchRequested,
+        timeoutMs: claudeTimeoutMs,
+      });
+      reply = appendClaudeCitations(result.reply, result.citations);
+    } else {
+      const result = await generateJarvisReply({
+        history: previousHistory,
+        userMessage: text,
+        engine: "openrouter",
+      });
+      reply = result.reply;
+    }
     await appendXavierMessage({
       userId: connection.user_id,
       conversationId: conversation.id,
@@ -725,7 +742,7 @@ async function processOfficialTelegramMessage(input: {
       return;
     }
 
-    if (!isClaudeConfigured()) {
+    if (!isClaudeConfigured() && !isOpenRouterConfigured()) {
       await sendOfficialTelegramText(chatId, officialTelegramText(locale, "claudeUnavailable"));
       return;
     }
@@ -757,6 +774,10 @@ async function processOfficialTelegramMessage(input: {
       hasAudio: Boolean(audio),
     });
     if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
+      if (!isClaudeConfigured()) {
+        await sendOfficialTelegramText(chatId, officialTelegramText(locale, "claudeUnavailable"));
+        return;
+      }
       const attachment = requestIsPdf
         ? await createLocalXavierPdf({ userId: link.user_id, taskId: `official-telegram-${link.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
         : requestIsPresentation
@@ -803,14 +824,25 @@ async function processOfficialTelegramMessage(input: {
       return;
     }
 
-    const result = await generateClaudeReply({
-      history: previousHistory,
-      systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
-      userMessage: text,
-      useWebSearch: researchRequested,
-      timeoutMs: claudeTimeoutMs,
-    });
-    const reply = appendClaudeCitations(result.reply, result.citations);
+    let reply: string;
+    if (researchRequested || !isOpenRouterConfigured()) {
+      const result = await generateClaudeReply({
+        history: previousHistory,
+        systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+        userMessage: text,
+        useWebSearch: researchRequested,
+        timeoutMs: claudeTimeoutMs,
+      });
+      reply = appendClaudeCitations(result.reply, result.citations);
+    } else {
+      const result = await generateJarvisReply({
+        history: previousHistory,
+        userMessage: text,
+        engine: "openrouter",
+        locale,
+      });
+      reply = result.reply;
+    }
     await appendXavierMessage({
       userId: link.user_id,
       conversationId: conversation.id,
