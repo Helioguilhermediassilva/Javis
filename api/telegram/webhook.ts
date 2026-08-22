@@ -11,9 +11,9 @@ import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegra
 import { generateJarvisReply } from "../../server/jarvisProxy.js";
 import { isOpenRouterConfigured } from "../../server/xavierOpenRouter.js";
 import { downloadTelegramImage, extractTelegramAudioReference, extractTelegramImageReference, transcribeTelegramAudio, type TelegramImageReference } from "../../server/telegramAudio.js";
-import { createXavierPdfAttachment } from "../../server/xavierPdf.js";
-import { createXavierPresentationAttachment } from "../../server/xavierPresentation.js";
-import { createXavierOfficeAttachment } from "../../server/xavierOffice.js";
+import { createXavierTransientPdfArtifact } from "../../server/xavierPdf.js";
+import { createXavierTransientPresentationArtifact } from "../../server/xavierPresentation.js";
+import { createXavierTransientOfficeArtifact } from "../../server/xavierOffice.js";
 import { getTelegramClaudeTimeoutMs, isDocumentTaskRequest, isImageTaskRequest, isPdfTaskRequest, isPresentationTaskRequest, isSpreadsheetTaskRequest, isVideoTaskRequest, shouldUseWebSearchForRequest } from "../../server/xavierArtifacts.js";
 import { handleXavierCrmRequest } from "../../server/xavierCrmAgent.js";
 import { sendXavierTelegramVoiceReply } from "../../server/xavierTelegramVoice.js";
@@ -30,11 +30,13 @@ import {
   isXavierCancellationCommand,
   approvalReference,
   executeApprovedXavierActionRequest,
+  type XavierActionRequest,
 } from "../../server/xavierTaskOrchestrator.js";
 import {
   decryptXavierTelegramToken,
   getStoredXavierTelegramConnection,
   sendXavierTelegramDocument,
+  sendXavierTelegramDocumentBytes,
   sendXavierTelegramMessage,
   sendXavierTelegramTyping,
   verifyXavierTelegramWebhookSecret,
@@ -43,6 +45,7 @@ import {
   consumeOfficialTelegramLinkCode,
   getOfficialTelegramLinkByChat,
   sendOfficialTelegramDocument,
+  sendOfficialTelegramDocumentBytes,
   sendOfficialTelegramMessage,
   sendOfficialTelegramTyping,
   touchOfficialTelegramLink,
@@ -150,6 +153,8 @@ async function createTelegramLocalArtifactAction(input: {
       plan: input.plan,
       request_id: input.requestId,
       local_artifact: true,
+      telegram_transient_artifact: true,
+      artifact_storage: "none",
       bot_mode: input.botMode,
       locale: input.locale,
       has_audio: input.hasAudio,
@@ -157,6 +162,13 @@ async function createTelegramLocalArtifactAction(input: {
     },
   });
 }
+
+type TelegramTransientArtifact = {
+  file_name: string;
+  bytes: Buffer;
+  mime_type: string;
+  size_bytes: number;
+};
 
 async function legacyTelegramApi(method: string, body: Record<string, unknown>): Promise<unknown> {
   const token = process.env.TELEGRAM_BOT_TOKEN || "";
@@ -170,6 +182,22 @@ async function legacyTelegramApi(method: string, body: Record<string, unknown>):
   const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; description?: string };
   if (!response.ok || payload.ok === false) throw new Error(`Telegram ${method} ${response.status}: ${(payload.description || "request failed").slice(0, 200)}`);
   return payload;
+}
+
+async function sendLegacyTelegramDocumentBytes(chatId: string, artifact: TelegramTransientArtifact): Promise<void> {
+  if (!Buffer.isBuffer(artifact.bytes) || artifact.bytes.length === 0) throw new Error("O arquivo gerado ficou vazio");
+  const token = process.env.TELEGRAM_BOT_TOKEN || "";
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN não configurado");
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  form.set("document", new Blob([artifact.bytes], { type: artifact.mime_type.trim().slice(0, 120) || "application/octet-stream" }), artifact.file_name.replace(/[^a-zA-Z0-9._ -]/g, "-").trim().slice(0, 120) || "xavier-arquivo.bin");
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(12_000),
+  });
+  const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; description?: string };
+  if (!response.ok || payload.ok === false) throw new Error(`Telegram sendDocument ${response.status}: ${(payload.description || "request failed").slice(0, 200)}`);
 }
 
 async function sendLegacyTelegramText(chatId: string, text: string): Promise<void> {
@@ -203,33 +231,25 @@ async function generateClaudeArtifactContent(input: {
 }
 
 async function createLocalXavierPdf(input: {
-  userId: string;
-  taskId: string;
   requestText: string;
   history: ClaudeHistoryMessage[];
   timeoutMs?: number;
-}): Promise<{ file_name: string; url: string; size_bytes: number }> {
+}): Promise<TelegramTransientArtifact> {
   const generated = await generateClaudeArtifactContent({ kind: "pdf", requestText: input.requestText, history: input.history, timeoutMs: input.timeoutMs });
-  return createXavierPdfAttachment({
-    userId: input.userId,
-    taskId: input.taskId,
+  return createXavierTransientPdfArtifact({
     title: "Documento solicitado ao Xavier",
     body: generated.content,
   });
 }
 
 async function createLocalXavierPresentation(input: {
-  userId: string;
-  taskId: string;
   requestText: string;
   history: ClaudeHistoryMessage[];
   timeoutMs?: number;
   imageUrls?: string[];
-}): Promise<{ file_name: string; url: string; size_bytes: number }> {
+}): Promise<TelegramTransientArtifact> {
   const generated = await generateClaudeArtifactContent({ kind: "presentation", requestText: input.requestText, history: input.history, timeoutMs: input.timeoutMs });
-  return createXavierPresentationAttachment({
-    userId: input.userId,
-    taskId: input.taskId,
+  return createXavierTransientPresentationArtifact({
     title: "Apresentação solicitada ao Xavier",
     outline: generated.content,
     imageUrls: input.imageUrls || [],
@@ -484,14 +504,13 @@ async function processPerUserTelegramMessage(input: {
         await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
         return;
       }
+      let completedAction: XavierActionRequest;
       try {
-        const attachment = requestIsPdf
-          ? await createLocalXavierPdf({ userId: connection.user_id, taskId: `telegram-${connection.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+        const artifact = requestIsPdf
+          ? await createLocalXavierPdf({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
           : requestIsPresentation
-            ? await createLocalXavierPresentation({ userId: connection.user_id, taskId: `telegram-${connection.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs, imageUrls: referenceImageUrls })
-            : await createXavierOfficeAttachment({
-              userId: connection.user_id,
-              taskId: `telegram-${connection.id}-${message.message_id}`,
+            ? await createLocalXavierPresentation({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs, imageUrls: referenceImageUrls })
+            : await createXavierTransientOfficeArtifact({
               title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
               kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
               requestText: text,
@@ -499,30 +518,28 @@ async function processPerUserTelegramMessage(input: {
               timeoutMs: claudeTimeoutMs,
             });
         const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
-        const generatedReply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
-        const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [attachment] });
-        const reply = actionReadyMessage(completedAction);
-        await appendXavierMessage({ userId: connection.user_id, conversationId: conversation.id, channel: "telegram", role: "assistant", content: reply, telegramMessageId: message.message_id });
-        await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
-          console.warn("[xavier-memory] Telegram artifact maintenance failed", (error as Error).message);
-        });
-        await sendXavierTelegramMessage(connection, chatId, reply);
-        await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
-        try {
-          await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
-        } catch (error) {
-          console.error("[telegram:xavier] generated artifact delivery failed", { connectionId: connection.id, updateId: update.update_id, fileName: attachment.file_name, error: (error as Error).message });
-          try {
-            await sendXavierTelegramMessage(connection, chatId, "O arquivo foi gerado, mas o Telegram não conseguiu anexá-lo nesta tentativa. Verifique se o bot pode enviar documentos e solicite o arquivo novamente.");
-          } catch (notificationError) {
-            console.error("[telegram:xavier] artifact delivery notification failed", (notificationError as Error).message);
-          }
-        }
+        await sendXavierTelegramDocumentBytes(connection, chatId, artifact.bytes, artifact.mime_type, `Arquivo gerado pelo Xavier: ${artifact.file_name}`, artifact.file_name);
+        const generatedReply = `Preparei a ${kind} solicitada e enviei o arquivo diretamente neste chat, senhor.\n${artifact.file_name} (${artifact.size_bytes} bytes). O binário não foi armazenado permanentemente.`;
+        completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [] });
       } catch (error) {
         const failedAction = await failXavierLocalAction(localAction, error);
         const reply = actionReadyMessage(failedAction);
         await sendXavierTelegramMessage(connection, chatId, reply);
         await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
+        return;
+      }
+      const reply = actionReadyMessage(completedAction);
+      await appendXavierMessage({ userId: connection.user_id, conversationId: conversation.id, channel: "telegram", role: "assistant", content: reply, telegramMessageId: message.message_id }).catch((error) => {
+        console.warn("[xavier-memory] Telegram artifact result persistence failed", (error as Error).message);
+      });
+      await maybeCompactXavierConversation(connection.user_id, conversation.id, profile.retention_days).catch((error) => {
+        console.warn("[xavier-memory] Telegram artifact maintenance failed", (error as Error).message);
+      });
+      try {
+        await sendXavierTelegramMessage(connection, chatId, reply);
+        await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
+      } catch (error) {
+        console.warn("[telegram:xavier] generated artifact confirmation delivery failed", (error as Error).message);
       }
       return;
     }
@@ -877,14 +894,13 @@ async function processOfficialTelegramMessage(input: {
         await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
         return;
       }
+      let completedAction: XavierActionRequest;
       try {
-        const attachment = requestIsPdf
-          ? await createLocalXavierPdf({ userId: link.user_id, taskId: `official-telegram-${link.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+        const artifact = requestIsPdf
+          ? await createLocalXavierPdf({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
           : requestIsPresentation
-            ? await createLocalXavierPresentation({ userId: link.user_id, taskId: `official-telegram-${link.id}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs, imageUrls: referenceImageUrls })
-            : await createXavierOfficeAttachment({
-              userId: link.user_id,
-              taskId: `official-telegram-${link.id}-${message.message_id}`,
+            ? await createLocalXavierPresentation({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs, imageUrls: referenceImageUrls })
+            : await createXavierTransientOfficeArtifact({
               title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
               kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
               requestText: text,
@@ -892,30 +908,28 @@ async function processOfficialTelegramMessage(input: {
               timeoutMs: claudeTimeoutMs,
             });
         const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
-        const generatedReply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
-        const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [attachment] });
-        const reply = actionReadyMessage(completedAction);
-        await appendXavierMessage({ userId: link.user_id, conversationId: conversation.id, channel: "telegram", role: "assistant", content: reply, telegramMessageId: message.message_id });
-        await maybeCompactXavierConversation(link.user_id, conversation.id, profile.retention_days).catch((error) => {
-          console.warn("[xavier-memory] Official Telegram artifact maintenance failed", (error as Error).message);
-        });
-        await sendOfficialTelegramText(chatId, reply);
-        await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
-        try {
-          await sendOfficialTelegramDocument(chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
-        } catch (error) {
-          console.error("[telegram:official] generated artifact delivery failed", { userId: link.user_id, updateId: update.update_id, fileName: attachment.file_name, error: (error as Error).message });
-          try {
-            await sendOfficialTelegramText(chatId, officialTelegramText(locale, "artifactDeliveryFailed"));
-          } catch (notificationError) {
-            console.error("[telegram:official] artifact delivery notification failed", (notificationError as Error).message);
-          }
-        }
+        await sendOfficialTelegramDocumentBytes(chatId, artifact.bytes, artifact.mime_type, `Arquivo gerado pelo Xavier: ${artifact.file_name}`, artifact.file_name);
+        const generatedReply = `Preparei a ${kind} solicitada e enviei o arquivo diretamente neste chat, senhor.\n${artifact.file_name} (${artifact.size_bytes} bytes). O binário não foi armazenado permanentemente.`;
+        completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [] });
       } catch (error) {
         const failedAction = await failXavierLocalAction(localAction, error);
         const reply = actionReadyMessage(failedAction);
         await sendOfficialTelegramText(chatId, reply);
         await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
+        return;
+      }
+      const reply = actionReadyMessage(completedAction);
+      await appendXavierMessage({ userId: link.user_id, conversationId: conversation.id, channel: "telegram", role: "assistant", content: reply, telegramMessageId: message.message_id }).catch((error) => {
+        console.warn("[xavier-memory] Official Telegram artifact result persistence failed", (error as Error).message);
+      });
+      await maybeCompactXavierConversation(link.user_id, conversation.id, profile.retention_days).catch((error) => {
+        console.warn("[xavier-memory] Official Telegram artifact maintenance failed", (error as Error).message);
+      });
+      try {
+        await sendOfficialTelegramText(chatId, reply);
+        await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
+      } catch (error) {
+        console.warn("[telegram:official] generated artifact confirmation delivery failed", (error as Error).message);
       }
       return;
     }
@@ -1122,13 +1136,11 @@ async function processLegacyTelegramMessage(input: {
       hasAudio: Boolean(audio),
     });
     if (requestIsPdf || requestIsPresentation || requestIsSpreadsheet || requestIsDocument || requestIsImage) {
-      const attachment = requestIsPdf
-        ? await createLocalXavierPdf({ userId: `legacy-${chatId}`, taskId: `telegram-${chatId}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+      const artifact = requestIsPdf
+        ? await createLocalXavierPdf({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
         : requestIsPresentation
-          ? await createLocalXavierPresentation({ userId: `legacy-${chatId}`, taskId: `telegram-${chatId}-${message.message_id}`, requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
-          : await createXavierOfficeAttachment({
-            userId: `legacy-${chatId}`,
-            taskId: `telegram-${chatId}-${message.message_id}`,
+          ? await createLocalXavierPresentation({ requestText: text, history: previousHistory, timeoutMs: claudeTimeoutMs })
+          : await createXavierTransientOfficeArtifact({
             title: requestIsSpreadsheet ? "Planilha solicitada ao Xavier" : requestIsImage ? "Imagem solicitada ao Xavier" : "Documento solicitado ao Xavier",
             kind: requestIsSpreadsheet ? "spreadsheet" : requestIsImage ? "image" : "document",
             requestText: text,
@@ -1136,7 +1148,8 @@ async function processLegacyTelegramMessage(input: {
             timeoutMs: claudeTimeoutMs,
           });
       const kind = requestIsPdf ? "PDF" : requestIsPresentation ? "apresentação editável" : requestIsSpreadsheet ? "planilha editável" : requestIsImage ? "imagem vetorial" : "documento editável";
-      const reply = `Preparei a ${kind} solicitada e estou enviando o arquivo agora, senhor.\n${attachment.file_name}`;
+      await sendLegacyTelegramDocumentBytes(chatId, artifact);
+      const reply = `Preparei a ${kind} solicitada e enviei o arquivo diretamente neste chat, senhor.\n${artifact.file_name} (${artifact.size_bytes} bytes). O binário não foi armazenado permanentemente.`;
       await appendTelegramMessage({
         chatId,
         telegramUserId: message.from?.id,
@@ -1147,7 +1160,6 @@ async function processLegacyTelegramMessage(input: {
         telegramUpdateId: undefined,
       });
       await sendLegacyTelegramText(chatId, reply);
-      await legacyTelegramApi("sendDocument", { chat_id: chatId, document: attachment.url, caption: `Arquivo gerado pelo Xavier: ${attachment.file_name}` });
       await sendLinkedVoiceReplyIfNeeded({ token: process.env.TELEGRAM_BOT_TOKEN || "", chatId, hasAudio: Boolean(audio), text: reply });
       return;
     }

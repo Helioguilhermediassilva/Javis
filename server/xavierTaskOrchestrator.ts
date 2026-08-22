@@ -490,7 +490,10 @@ export function actionReadyMessage(action: XavierActionRequest): string {
     const base = action.result_text?.trim()
       ? `A solicitação “${action.title}” foi concluída.\n\n${action.result_text.trim()}`
       : `A solicitação “${action.title}” foi concluída e os arquivos estão disponíveis nesta sessão.`;
-    return `${base}${creditLowBalanceMessage(action)}`;
+    const transientTelegramNote = action.metadata.telegram_transient_artifact === true
+      ? "\n\nO arquivo foi enviado diretamente neste chat. O Xavier não armazenou o binário permanentemente; o contexto textual da solicitação permanece disponível para refinamentos."
+      : "";
+    return `${base}${transientTelegramNote}${creditLowBalanceMessage(action)}`;
   }
   if (action.status === "failed") {
     return `Não foi possível concluir “${action.title}” nesta tentativa. Nenhuma nova autorização foi concedida. ${action.error_message || "O provedor autorizado não respondeu."}`;

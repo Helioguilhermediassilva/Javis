@@ -121,6 +121,29 @@ describe("xavierTelegramOfficial", () => {
     expect(consumedCall).toBeTruthy();
   });
 
+  it("envia documento por bytes em multipart sem baixar URL externa", async () => {
+    const fetchMock: FetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/sendDocument");
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBeInstanceOf(FormData);
+      const form = init?.body as FormData;
+      expect(form.get("chat_id")).toBe("987654");
+      expect(form.get("caption")).toBe("Arquivo de teste");
+      const document = form.get("document");
+      expect(document).toBeInstanceOf(File);
+      expect((document as File).name).toBe("teste.pdf");
+      expect((document as File).type).toBe("application/pdf");
+      expect(await (document as File).arrayBuffer()).toEqual(Uint8Array.from([37, 80, 68, 70]).buffer);
+      return jsonResponse({ ok: true, result: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await official.sendOfficialTelegramDocumentBytes("987654", Buffer.from("%PDF"), "application/pdf", "Arquivo de teste", "teste.pdf");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith("https://files.example"))).toBe(false);
+  });
+
   it("consulta o vínculo por usuário sem depender de getMe do Telegram", async () => {
     const link = {
       id: "link-user-2",

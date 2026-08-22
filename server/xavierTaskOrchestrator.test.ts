@@ -6,6 +6,7 @@ import {
   isXavierApprovalCommand,
   isXavierCancellationCommand,
   formatXavierActionFailure,
+  actionReadyMessage,
 } from "./xavierTaskOrchestrator.js";
 
 describe("Xavier task orchestrator", () => {
@@ -39,6 +40,32 @@ describe("Xavier task orchestrator", () => {
     expect(getXavierActionReferenceFilter("aprovar XAV-ABC12345")).toBeNull();
     expect(getXavierActionReferenceFilter(" XAV-ABC12345 ")).toEqual({ field: "approval_code", value: "XAV-ABC12345" });
     expect(getXavierActionReferenceFilter("39813673-0609-4d48-bed9-3006c96cdd77")).toEqual({ field: "id", value: "39813673-0609-4d48-bed9-3006c96cdd77" });
+  });
+
+  it("explica a entrega transitória de um artefato Telegram concluído", () => {
+    const message = actionReadyMessage({
+      id: "action-1",
+      user_id: "user-1",
+      channel: "telegram",
+      conversation_id: "conversation-1",
+      telegram_connection_id: "connection-1",
+      telegram_chat_id: "987654",
+      kind: "presentation",
+      title: "Apresentação solicitada",
+      request_text: "gere uma apresentação",
+      status: "completed",
+      approval_code: "XAV-TEST1234",
+      metadata: { telegram_transient_artifact: true },
+      result_text: "O arquivo foi enviado.",
+      attachments: [],
+      error_message: null,
+      created_at: "2026-08-22T00:00:00.000Z",
+      updated_at: "2026-08-22T00:00:00.000Z",
+      approved_at: null,
+      completed_at: "2026-08-22T00:00:00.000Z",
+    });
+    expect(message).toContain("enviado diretamente neste chat");
+    expect(message).toContain("não armazenou o binário permanentemente");
   });
 
   it("converte falhas conhecidas em mensagens acionáveis", () => {

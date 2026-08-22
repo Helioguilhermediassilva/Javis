@@ -11,6 +11,13 @@ export interface XavierGeneratedPdfAttachment {
   size_bytes: number;
 }
 
+export interface XavierTransientPdfArtifact {
+  file_name: string;
+  bytes: Buffer;
+  mime_type: "application/pdf";
+  size_bytes: number;
+}
+
 function adminHeaders(contentType = "application/json"): Headers {
   const key = getSupabaseAdminKey();
   const headers = new Headers({
@@ -29,6 +36,10 @@ function pdfSafeText(value: string): string {
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "?");
+}
+
+function pdfFileName(title: string): string {
+  return `${pdfSafeText(title).replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "xavier-documento"}.pdf`;
 }
 
 function renderPdfBuffer(title: string, body: string): Promise<Buffer> {
@@ -124,6 +135,20 @@ async function signedUrl(path: string): Promise<string> {
   return value.startsWith("http") ? value : `${SUPABASE_URL}/storage/v1${value.startsWith("/") ? value : `/${value}`}`;
 }
 
+export async function createXavierTransientPdfArtifact(input: {
+  title: string;
+  body: string;
+}): Promise<XavierTransientPdfArtifact> {
+  const pdf = await renderPdfBuffer(input.title, input.body);
+  if (pdf.length > 20 * 1024 * 1024) throw new Error("PDF gerado excede o limite transitório de 20 MB");
+  return {
+    file_name: pdfFileName(input.title),
+    bytes: pdf,
+    mime_type: "application/pdf",
+    size_bytes: pdf.length,
+  };
+}
+
 export async function createXavierPdfAttachment(input: {
   userId: string;
   taskId: string;
@@ -136,7 +161,7 @@ export async function createXavierPdfAttachment(input: {
   const path = storagePath(input.userId, input.taskId);
   await uploadPdf(path, pdf);
   return {
-    file_name: `${pdfSafeText(input.title).replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) || "xavier-documento"}.pdf`,
+    file_name: pdfFileName(input.title),
     url: await signedUrl(path),
     size_bytes: pdf.length,
   };

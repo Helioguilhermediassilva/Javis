@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXavierOfficeAttachment } from "./xavierOffice";
+import { createXavierOfficeAttachment, createXavierTransientOfficeArtifact } from "./xavierOffice";
 
 const originalFetch = globalThis.fetch;
 
@@ -62,6 +62,29 @@ describe("Xavier office artifacts", () => {
     expect((uploads[0].body as Buffer).subarray(0, 2).toString()).toBe(kind === "image" ? "<s" : "PK");
     const headers = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((call) => String(call[0]).includes("/storage/v1/object/xavier-files/"))?.[1]?.headers as Headers;
     expect(headers.get("Content-Type")).toBe(contentType);
+  });
+
+  it.each([
+    ["document", "docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "PK"],
+    ["spreadsheet", "xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "PK"],
+    ["image", "svg", "image/svg+xml", "<s"],
+  ] as const)("gera %s em memória sem chamar o Storage", async (kind, extension, contentType, signature) => {
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    const { uploads } = stubServices();
+
+    const result = await createXavierTransientOfficeArtifact({
+      title: "Artefato transitório",
+      kind,
+      requestText: `Crie um ${kind}`,
+      history: [],
+      timeoutMs: 5_000,
+    });
+
+    expect(result.file_name.endsWith(`.${extension}`)).toBe(true);
+    expect(result.mime_type).toBe(contentType);
+    expect(result.size_bytes).toBe(result.bytes.length);
+    expect(result.bytes.subarray(0, 2).toString()).toBe(signature);
+    expect(uploads).toHaveLength(0);
   });
 });
 

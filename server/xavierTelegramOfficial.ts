@@ -316,6 +316,23 @@ export async function sendOfficialTelegramTyping(chatId: string): Promise<void> 
 export async function sendOfficialTelegramMessage(chatId: string, text: string): Promise<void> {
   await telegramApi("sendMessage", { chat_id: chatId, text: text.slice(0, 4096), disable_web_page_preview: true });
 }
+function officialTelegramFileName(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9._ -]/g, "-").trim().slice(0, 120) || "xavier-arquivo.bin";
+}
+
+function officialTelegramDocumentMimeType(mimeType: string): string {
+  return mimeType.trim().slice(0, 120) || "application/octet-stream";
+}
+
+export async function sendOfficialTelegramDocumentBytes(chatId: string, bytes: Buffer, mimeType: string, caption?: string, fileName = "xavier-arquivo.bin"): Promise<void> {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error("O arquivo gerado ficou vazio");
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  if (caption) form.set("caption", caption.slice(0, 1024));
+  form.set("document", new Blob([bytes], { type: officialTelegramDocumentMimeType(mimeType) }), officialTelegramFileName(fileName));
+  await telegramMultipartApi("sendDocument", form);
+}
+
 export async function sendOfficialTelegramDocument(chatId: string, documentUrl: string, caption?: string, fileName = "xavier-arquivo.bin"): Promise<void> {
   const parsed = new URL(documentUrl);
   if (parsed.protocol !== "https:") throw new Error("Arquivo Telegram precisa usar URL HTTPS");

@@ -27,6 +27,13 @@ export interface XavierGeneratedPresentationAttachment {
   size_bytes: number;
 }
 
+export interface XavierTransientPresentationArtifact {
+  file_name: string;
+  bytes: Buffer;
+  mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  size_bytes: number;
+}
+
 interface PresentationSlide {
   title: string;
   bullets: string[];
@@ -288,6 +295,23 @@ export async function renderXavierPresentationBuffer(title: string, outline: str
 
   const output = await pptx.write({ outputType: "nodebuffer" });
   return Buffer.from(output as Buffer);
+}
+
+export async function createXavierTransientPresentationArtifact(input: {
+  title: string;
+  outline: string;
+  imageUrls?: string[];
+}): Promise<XavierTransientPresentationArtifact> {
+  const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || []);
+  if (MAX_PRESENTATION_SIZE > 0 && pptx.length > MAX_PRESENTATION_SIZE) {
+    throw new Error(`A apresentação excedeu o limite técnico transitório configurado (${formatBytes(MAX_PRESENTATION_SIZE)})`);
+  }
+  return {
+    file_name: `${storageSafePart(input.title, "xavier-apresentacao")}.pptx`,
+    bytes: pptx,
+    mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    size_bytes: pptx.length,
+  };
 }
 
 export async function createXavierPresentationAttachment(input: {

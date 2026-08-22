@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
-import { createXavierPresentationAttachment, renderXavierPresentationBuffer } from "./xavierPresentation.js";
+import { createXavierPresentationAttachment, createXavierTransientPresentationArtifact, renderXavierPresentationBuffer } from "./xavierPresentation.js";
 
 describe("renderXavierPresentationBuffer", () => {
   afterEach(() => {
@@ -103,6 +103,22 @@ describe("renderXavierPresentationBuffer", () => {
     expect(fetchMock).toHaveBeenCalledTimes(7);
     expect(pptx.subarray(0, 2).toString()).toBe("PK");
     expect(pptx.length).toBeLessThan(5 * 1024 * 1024);
+  });
+
+  it("gera um PPTX transitório sem chamar o Storage", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await createXavierTransientPresentationArtifact({
+      title: "Apresentação transitória",
+      outline: "# Apresentação transitória\n\n## Contexto\n- Conteúdo mantido em memória",
+    });
+
+    expect(result.file_name).toBe("Apresentacao-transitoria.pptx");
+    expect(result.mime_type).toContain("presentationml.presentation");
+    expect(result.size_bytes).toBe(result.bytes.length);
+    expect(result.bytes.subarray(0, 2).toString()).toBe("PK");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("remove o objeto parcial quando o Storage rejeita o upload por tamanho", async () => {

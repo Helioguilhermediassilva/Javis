@@ -16,6 +16,14 @@ export interface XavierGeneratedOfficeAttachment {
   kind: OfficeKind;
 }
 
+export interface XavierTransientOfficeArtifact {
+  file_name: string;
+  bytes: Buffer;
+  mime_type: string;
+  size_bytes: number;
+  kind: OfficeKind;
+}
+
 function safe(value: string, fallback = "xavier-arquivo"): string {
   return value
     .normalize("NFKD")
@@ -149,17 +157,68 @@ async function createStored(input: { userId: string; taskId: string; title: stri
   return createStoredBuffer({ userId: input.userId, taskId: input.taskId, title: input.title, kind: input.kind, buffer: rendered, contentType });
 }
 
+function officeExtension(kind: OfficeKind): string {
+  return kind === "document" ? "docx" : kind === "spreadsheet" ? "xlsx" : "svg";
+}
+
+function officeMimeType(kind: OfficeKind): string {
+  return kind === "document"
+    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    : kind === "spreadsheet"
+      ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      : "image/svg+xml";
+}
+
+function officeFileName(title: string, kind: OfficeKind, fileName?: string): string {
+  const extension = officeExtension(kind);
+  const base = safe(fileName || title, "xavier-arquivo");
+  return base.toLowerCase().endsWith(`.${extension}`) ? base : `${base}.${extension}`;
+}
+
+function transientOfficeArtifact(input: { title: string; kind: OfficeKind; buffer: Buffer; fileName?: string; contentType?: string }): XavierTransientOfficeArtifact {
+  if (!input.buffer.length) throw new Error("O artefato gerado ficou vazio");
+  if (input.buffer.length > MAX_FILE_SIZE) throw new Error("Artefato gerado excede o limite transitório de 20 MB");
+  return {
+    file_name: officeFileName(input.title, input.kind, input.fileName),
+    bytes: input.buffer,
+    mime_type: input.contentType || officeMimeType(input.kind),
+    size_bytes: input.buffer.length,
+    kind: input.kind,
+  };
+}
+
+function officeInstruction(kind: OfficeKind): string {
+  return kind === "document"
+    ? "Escreva o conteúdo completo de um documento profissional em português. Use Markdown simples, com título em # e seções em ##. Não explique limitações nem use cercas de código."
+    : kind === "spreadsheet"
+      ? "Crie os dados de uma planilha profissional em português. Responda somente com linhas CSV usando ponto e vírgula como separador; a primeira linha deve ser o cabeçalho; não use Markdown, explicações ou cercas de código."
+      : "Crie o texto de uma composição visual/infográfico em português. Responda com um título curto na primeira linha e até 10 linhas curtas de conteúdo; não use Markdown, explicações ou cercas de código.";
+}
+
 function selectGeneratedOfficeFile(files: ClaudeGeneratedFile[], kind: OfficeKind): ClaudeGeneratedFile | null {
   const extensions = kind === "document" ? [".docx", ".odt", ".rtf"] : kind === "spreadsheet" ? [".xlsx", ".xls", ".csv"] : [".svg"];
   return files.find((file) => extensions.some((extension) => file.file_name.toLowerCase().endsWith(extension))) || null;
 }
 
+export async function createXavierTransientOfficeArtifact(input: { title: string; kind: OfficeKind; requestText: string; history: ClaudeHistoryMessage[]; timeoutMs?: number }): Promise<XavierTransientOfficeArtifact> {
+  const result = await generateClaudeReply({
+    history: input.history,
+    systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+    userMessage: `${officeInstruction(input.kind)}\n\nPedido original: ${input.requestText}`,
+    useWebSearch: false,
+    useCodeExecution: process.env.XAVIER_CLAUDE_CODE_EXECUTION === "true",
+    maxTokens: 8_000,
+    timeoutMs: input.timeoutMs,
+  });
+  const generated = selectGeneratedOfficeFile(result.generated_files || [], input.kind);
+  if (generated) return transientOfficeArtifact({ title: input.title, kind: input.kind, buffer: generated.data, fileName: generated.file_name, contentType: generated.mime_type });
+  const content = officeContent({ kind: input.kind, title: input.title, requestText: input.requestText, content: appendClaudeCitations(result.reply, result.citations) });
+  const rendered = input.kind === "document" ? renderDocx(input.title, content) : input.kind === "spreadsheet" ? renderXlsx(input.title, content) : renderSvg(input.title, content);
+  return transientOfficeArtifact({ title: input.title, kind: input.kind, buffer: rendered });
+}
+
 export async function createXavierOfficeAttachment(input: { userId: string; taskId: string; title: string; kind: OfficeKind; requestText: string; history: ClaudeHistoryMessage[]; timeoutMs?: number }): Promise<XavierGeneratedOfficeAttachment> {
-  const instruction = input.kind === "document"
-    ? "Escreva o conteúdo completo de um documento profissional em português. Use Markdown simples, com título em # e seções em ##. Não explique limitações nem use cercas de código."
-    : input.kind === "spreadsheet"
-      ? "Crie os dados de uma planilha profissional em português. Responda somente com linhas CSV usando ponto e vírgula como separador; a primeira linha deve ser o cabeçalho; não use Markdown, explicações ou cercas de código."
-      : "Crie o texto de uma composição visual/infográfico em português. Responda com um título curto na primeira linha e até 10 linhas curtas de conteúdo; não use Markdown, explicações ou cercas de código.";
+  const instruction = officeInstruction(input.kind);
   const result = await generateClaudeReply({ history: input.history, systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT, userMessage: `${instruction}\n\nPedido original: ${input.requestText}`, useWebSearch: false, useCodeExecution: process.env.XAVIER_CLAUDE_CODE_EXECUTION === "true", maxTokens: 8_000, timeoutMs: input.timeoutMs });
   const generated = selectGeneratedOfficeFile(result.generated_files || [], input.kind);
   if (generated) {

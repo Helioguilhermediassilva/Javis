@@ -263,6 +263,30 @@ export async function sendXavierTelegramMessage(connection: StoredConnection, ch
   });
 }
 
+function telegramFileName(fileName: string): string {
+  return fileName.replace(/[^a-zA-Z0-9._ -]/g, "-").trim().slice(0, 120) || "xavier-arquivo.bin";
+}
+
+function telegramDocumentMimeType(mimeType: string): string {
+  return mimeType.trim().slice(0, 120) || "application/octet-stream";
+}
+
+export async function sendXavierTelegramDocumentBytes(
+  connection: StoredConnection,
+  chatId: string,
+  bytes: Buffer,
+  mimeType: string,
+  caption?: string,
+  fileName = "xavier-arquivo.bin",
+): Promise<void> {
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error("O arquivo gerado ficou vazio");
+  const form = new FormData();
+  form.set("chat_id", chatId);
+  if (caption) form.set("caption", caption.slice(0, 1024));
+  form.set("document", new Blob([bytes], { type: telegramDocumentMimeType(mimeType) }), telegramFileName(fileName));
+  await telegramMultipartApi(decryptToken(connection.encrypted_bot_token), "sendDocument", form);
+}
+
 export async function sendXavierTelegramDocument(
   connection: StoredConnection,
   chatId: string,
