@@ -176,6 +176,34 @@ async function markActionFailed(action: XavierActionRequest, error: unknown): Pr
   }
 }
 
+export async function completeXavierLocalAction(input: {
+  action: XavierActionRequest;
+  resultText: string;
+  attachments?: XavierActionAttachment[];
+  actualUnits?: number;
+}): Promise<XavierActionRequest> {
+  const { action } = input;
+  if (action.metadata.credit_blocked === true) return action;
+  if (action.status !== "queued" && action.status !== "running") return action;
+  try {
+    const running = action.status === "running" ? action : await patchAction(action, { status: "running" });
+    const completed = await patchAction(running, {
+      status: "completed",
+      result_text: cleanText(input.resultText, 12_000),
+      attachments: input.attachments || [],
+      completed_at: new Date().toISOString(),
+    });
+    await captureXavierCredits(completed, input.actualUnits);
+    return completed;
+  } catch (error) {
+    return markActionFailed(action, error);
+  }
+}
+
+export async function failXavierLocalAction(action: XavierActionRequest, error: unknown): Promise<XavierActionRequest> {
+  return markActionFailed(action, error);
+}
+
 export async function executeApprovedXavierActionRequest(action: XavierActionRequest): Promise<XavierActionRequest> {
   if (action.status !== "queued") return action;
   const isDirectRunwayAction = action.kind === "image" || action.kind === "video" || (action.kind === "presentation" && action.metadata.visual_presentation === true);
@@ -348,6 +376,7 @@ export async function createXavierActionRequest(input: {
   if (!creditDecision.enabled) return action;
   if (!creditDecision.ok) {
     return patchAction(action, {
+      status: "pending_approval",
       metadata: {
         ...action.metadata,
         credit_blocked: true,
@@ -396,6 +425,7 @@ async function findPendingAction(userId: string, reference?: string | null): Pro
 export async function approveXavierActionRequest(userId: string, reference?: string | null): Promise<XavierActionRequest | null> {
   const action = await findPendingAction(userId, reference);
   if (!action) return null;
+  if (action.metadata.credit_blocked === true) return action;
   const now = new Date().toISOString();
   const params = new URLSearchParams({ id: `eq.${action.id}`, user_id: `eq.${userId}`, status: "eq.pending_approval" });
   const response = await supabaseRequest(`${ACTION_TABLE}?${params}`, {

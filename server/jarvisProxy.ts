@@ -61,7 +61,9 @@ import {
   isXavierApprovalCommand,
   isXavierCancellationCommand,
   approvalReference,
+  completeXavierLocalAction,
   executeApprovedXavierActionRequest,
+  failXavierLocalAction,
 } from "./xavierTaskOrchestrator.js";
 
 export const JARVIS_SYSTEM_PROMPT = `Você é o Xavier, assistente operacional da NowGo AI — personalidade inspirada no mordomo digital do universo Homem de Ferro.
@@ -791,6 +793,41 @@ async function buildLocalOfficeResult(input: {
   return { reply: `Preparei a ${label} solicitada, senhor. O arquivo está disponível no painel: ${attachment.file_name}`, attachment };
 }
 
+function localActionIntent(kind: "document" | "pdf" | "presentation" | "spreadsheet" | "image") {
+  const labels = {
+    document: "Documento solicitado ao Xavier",
+    pdf: "PDF solicitado ao Xavier",
+    presentation: "Apresentação solicitada ao Xavier",
+    spreadsheet: "Planilha solicitada ao Xavier",
+    image: "Imagem solicitada ao Xavier",
+  } as const;
+  return { kind, title: labels[kind], requiresApproval: false, execution: "local" as const };
+}
+
+async function createLocalArtifactAction(input: {
+  context: AuthenticatedWebChatContext;
+  requestText: string;
+  kind: "document" | "pdf" | "presentation" | "spreadsheet" | "image";
+  requestId: string;
+}) {
+  return createXavierActionRequest({
+    userId: input.context.userId,
+    channel: "web",
+    conversationId: input.context.conversation.id,
+    requestText: input.requestText,
+    intent: localActionIntent(input.kind),
+    metadata: {
+      plan: input.context.plan,
+      request_id: input.requestId,
+      local_artifact: true,
+    },
+  });
+}
+
+function localActionAttachment(attachment: { file_name: string; url: string; size_bytes: number }) {
+  return { file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes };
+}
+
 function persistedUserContent(payload: ChatPayload): string {
   const text = (payload.userMessage || "").toString().trim();
   const attachmentNames = (payload.attachments || [])
@@ -995,34 +1032,48 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
     }
     if (context.persist && isPresentationTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
-      const imageUrls = await resolveSessionImageUrls({
-        userId: context.userId,
-        conversationId: context.conversation.id,
-        attachments: authenticatedPayload.attachments,
-      });
-      const { reply, attachment } = await buildLocalPresentationResult({
-        userId: context.userId,
-        taskId: `web-${context.conversation.id}-${Date.now()}`,
-        requestText: authenticatedPayload.userMessage || "",
-        history: context.history,
-        imageUrls,
-      });
-      await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
-      await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
-        console.warn("[xavier-memory] local presentation maintenance failed", (error as Error).message);
-      });
-      recordXavierUsageEventDetached({
-        userId: telemetryUserId,
-        requestId,
-        channel: "web",
-        eventName: "artifact_presentation",
-        status: "success",
-        provider: "local",
-        model: "pptxgenjs",
-        latencyMs: Date.now() - startedAt,
-        metadata: { route: "chat_json" },
-      });
-      sendJson(res, 200, { reply, tools_used: ["pptxgenjs.local"], timings: [], attachments: [attachment], local_presentation: true });
+      const localAction = await createLocalArtifactAction({ context, requestId, requestText: authenticatedPayload.userMessage || "", kind: "presentation" });
+      if (localAction.metadata.credit_blocked === true) {
+        const reply = actionReadyMessage(localAction);
+        await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+        sendJson(res, 200, { reply, tools_used: [], timings: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        return;
+      }
+      try {
+        const imageUrls = await resolveSessionImageUrls({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          attachments: authenticatedPayload.attachments,
+        });
+        const { reply: generatedReply, attachment } = await buildLocalPresentationResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: authenticatedPayload.userMessage || "",
+          history: context.history,
+          imageUrls,
+        });
+        const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+        const reply = actionReadyMessage(completedAction);
+        await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+        await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+          console.warn("[xavier-memory] local presentation maintenance failed", (error as Error).message);
+        });
+        recordXavierUsageEventDetached({
+          userId: telemetryUserId,
+          requestId,
+          channel: "web",
+          eventName: "artifact_presentation",
+          status: "success",
+          provider: "local",
+          model: "pptxgenjs",
+          latencyMs: Date.now() - startedAt,
+          metadata: { route: "chat_json", credit_action_id: completedAction.id },
+        });
+        sendJson(res, 200, { reply, tools_used: ["pptxgenjs.local"], timings: [], attachments: completedAction.attachments, local_presentation: true, action_id: completedAction.id, action_status: completedAction.status });
+      } catch (error) {
+        const failedAction = await failXavierLocalAction(localAction, error);
+        throw new JarvisChatError(502, actionReadyMessage(failedAction));
+      }
       return;
     }
     const officeKind = isSpreadsheetTaskRequest(authenticatedPayload.userMessage || "")
@@ -1033,16 +1084,30 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
           ? "document" as const
           : null;
     if (context.persist && officeKind && !fileEditRequested) {
-      const { reply, attachment } = await buildLocalOfficeResult({
-        userId: context.userId,
-        taskId: `web-${context.conversation.id}-${Date.now()}`,
-        requestText: authenticatedPayload.userMessage || "",
-        history: context.history,
-        kind: officeKind,
-      });
-      await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
-      await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
-      sendJson(res, 200, { reply, tools_used: [`${officeKind}.local`], timings: [], attachments: [attachment], local_artifact: officeKind });
+      const localAction = await createLocalArtifactAction({ context, requestId, requestText: authenticatedPayload.userMessage || "", kind: officeKind });
+      if (localAction.metadata.credit_blocked === true) {
+        const reply = actionReadyMessage(localAction);
+        await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+        sendJson(res, 200, { reply, tools_used: [], timings: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        return;
+      }
+      try {
+        const { reply: generatedReply, attachment } = await buildLocalOfficeResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: authenticatedPayload.userMessage || "",
+          history: context.history,
+          kind: officeKind,
+        });
+        const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+        const reply = actionReadyMessage(completedAction);
+        await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+        await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
+        sendJson(res, 200, { reply, tools_used: [`${officeKind}.local`], timings: [], attachments: completedAction.attachments, local_artifact: officeKind, action_id: completedAction.id, action_status: completedAction.status });
+      } catch (error) {
+        const failedAction = await failXavierLocalAction(localAction, error);
+        throw new JarvisChatError(502, actionReadyMessage(failedAction));
+      }
       return;
     }
     if (claudeTask && isClaudeConfigured() && (!isPdfTaskRequest(authenticatedPayload.userMessage || "") || fileEditRequested)) {
@@ -1092,34 +1157,48 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
       return;
     }
     if (context.persist && isPdfTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
-      const { reply, attachment } = await buildLocalPdfResult({
-        userId: context.userId,
-        taskId: `web-${context.conversation.id}-${Date.now()}`,
-        requestText: authenticatedPayload.userMessage || "",
-        history: context.history,
-      });
-      await appendXavierMessage({
-        userId: context.userId,
-        conversationId: context.conversation.id,
-        channel: "web",
-        role: "assistant",
-        content: reply,
-      });
-      await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
-        console.warn("[xavier-memory] local PDF maintenance failed", (error as Error).message);
-      });
-      recordXavierUsageEventDetached({
-        userId: telemetryUserId,
-        requestId,
-        channel: "web",
-        eventName: "artifact_pdf",
-        status: "success",
-        provider: "local",
-        model: "pdf",
-        latencyMs: Date.now() - startedAt,
-        metadata: { route: "chat_json" },
-      });
-      sendJson(res, 200, { reply, tools_used: ["pdfkit.local"], timings: [], attachments: [attachment], local_pdf: true });
+      const localAction = await createLocalArtifactAction({ context, requestId, requestText: authenticatedPayload.userMessage || "", kind: "pdf" });
+      if (localAction.metadata.credit_blocked === true) {
+        const reply = actionReadyMessage(localAction);
+        await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+        sendJson(res, 200, { reply, tools_used: [], timings: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        return;
+      }
+      try {
+        const { reply: generatedReply, attachment } = await buildLocalPdfResult({
+          userId: context.userId,
+          taskId: `web-${context.conversation.id}-${Date.now()}`,
+          requestText: authenticatedPayload.userMessage || "",
+          history: context.history,
+        });
+        const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+        const reply = actionReadyMessage(completedAction);
+        await appendXavierMessage({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          channel: "web",
+          role: "assistant",
+          content: reply,
+        });
+        await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+          console.warn("[xavier-memory] local PDF maintenance failed", (error as Error).message);
+        });
+        recordXavierUsageEventDetached({
+          userId: telemetryUserId,
+          requestId,
+          channel: "web",
+          eventName: "artifact_pdf",
+          status: "success",
+          provider: "local",
+          model: "pdf",
+          latencyMs: Date.now() - startedAt,
+          metadata: { route: "chat_json", credit_action_id: completedAction.id },
+        });
+        sendJson(res, 200, { reply, tools_used: ["pdfkit.local"], timings: [], attachments: completedAction.attachments, local_pdf: true, action_id: completedAction.id, action_status: completedAction.status });
+      } catch (error) {
+        const failedAction = await failXavierLocalAction(localAction, error);
+        throw new JarvisChatError(502, actionReadyMessage(failedAction));
+      }
       return;
     }
     const result = await generateJarvisReply(authenticatedPayload);
@@ -1421,7 +1500,9 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
       intent: taskIntent,
       metadata: { requested_engine: requestedEngine, locale, reference_image_urls: referenceImageUrls, plan: context.plan },
     });
-    const executedAction = action.status === "queued" ? await executeApprovedXavierActionRequest(action) : action;
+    const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
+      ? await executeApprovedXavierActionRequest(action)
+      : action;
     const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
       ? approvalPrompt(executedAction)
       : actionReadyMessage(executedAction);
@@ -1445,92 +1526,137 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
             ? "document" as const
             : null;
       if (streamOfficeKind) {
-        const { reply, attachment } = await buildLocalOfficeResult({
-          userId: context.userId,
-          taskId: `web-${context.conversation.id}-${Date.now()}`,
-          requestText: userMessage,
-          history,
-          kind: streamOfficeKind,
-        });
-        if (context.persist) {
-          await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
-          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
+        const localAction = await createLocalArtifactAction({ context, requestId, requestText: userMessage, kind: streamOfficeKind });
+        if (localAction.metadata.credit_blocked === true) {
+          const reply = actionReadyMessage(localAction);
+          if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+          sseWrite(res, { type: "delta", text: reply });
+          sseWrite(res, { type: "done", reply, tools_used: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        } else {
+          try {
+            const { reply: generatedReply, attachment } = await buildLocalOfficeResult({
+              userId: context.userId,
+              taskId: `web-${context.conversation.id}-${Date.now()}`,
+              requestText: userMessage,
+              history,
+              kind: streamOfficeKind,
+            });
+            const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+            const reply = actionReadyMessage(completedAction);
+            if (context.persist) {
+              await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+              await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch(() => undefined);
+            }
+            for (const item of completedAction.attachments) sseWrite(res, { type: "file", file_name: item.file_name, url: item.url, size_bytes: item.size_bytes });
+            sseWrite(res, { type: "delta", text: reply });
+            sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", `${streamOfficeKind}.local`], executor: "credits", local_artifact: streamOfficeKind, action_id: completedAction.id, action_status: completedAction.status, attachments: completedAction.attachments });
+          } catch (error) {
+            const failedAction = await failXavierLocalAction(localAction, error);
+            throw new JarvisChatError(502, actionReadyMessage(failedAction));
+          }
         }
-        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
-        sseWrite(res, { type: "delta", text: reply });
-        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", `${streamOfficeKind}.local`], executor: "claude", local_artifact: streamOfficeKind });
       } else if (isPresentationTaskRequest(userMessage)) {
-        const imageUrls = await resolveSessionImageUrls({
-          userId: context.userId,
-          conversationId: context.conversation.id,
-          attachments,
-        });
-        const { reply, attachment } = await buildLocalPresentationResult({
-          userId: context.userId,
-          taskId: `web-${context.conversation.id}-${Date.now()}`,
-          requestText: userMessage,
-          history,
-          imageUrls,
-        });
-        if (context.persist) {
-          await appendXavierMessage({
-            userId: context.userId,
-            conversationId: context.conversation.id,
-            channel: "web",
-            role: "assistant",
-            content: reply,
-          });
-          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
-            console.warn("[xavier-memory] Claude presentation maintenance failed", (error as Error).message);
-          });
+        const localAction = await createLocalArtifactAction({ context, requestId, requestText: userMessage, kind: "presentation" });
+        if (localAction.metadata.credit_blocked === true) {
+          const reply = actionReadyMessage(localAction);
+          if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+          sseWrite(res, { type: "delta", text: reply });
+          sseWrite(res, { type: "done", reply, tools_used: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        } else {
+          try {
+            const imageUrls = await resolveSessionImageUrls({
+              userId: context.userId,
+              conversationId: context.conversation.id,
+              attachments,
+            });
+            const { reply: generatedReply, attachment } = await buildLocalPresentationResult({
+              userId: context.userId,
+              taskId: `web-${context.conversation.id}-${Date.now()}`,
+              requestText: userMessage,
+              history,
+              imageUrls,
+            });
+            const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+            const reply = actionReadyMessage(completedAction);
+            if (context.persist) {
+              await appendXavierMessage({
+                userId: context.userId,
+                conversationId: context.conversation.id,
+                channel: "web",
+                role: "assistant",
+                content: reply,
+              });
+              await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+                console.warn("[xavier-memory] Claude presentation maintenance failed", (error as Error).message);
+              });
+            }
+            for (const item of completedAction.attachments) sseWrite(res, { type: "file", file_name: item.file_name, url: item.url, size_bytes: item.size_bytes });
+            sseWrite(res, { type: "delta", text: reply });
+            sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pptxgenjs.local"], executor: "credits", local_presentation: true, action_id: completedAction.id, action_status: completedAction.status, attachments: completedAction.attachments });
+            recordXavierUsageEventDetached({
+              userId: context.persist ? context.userId : null,
+              requestId,
+              channel: "web",
+              eventName: "artifact_presentation",
+              status: "success",
+              provider: "local",
+              model: "pptxgenjs",
+              latencyMs: Date.now() - startedAt,
+              metadata: { route: "chat_stream", executor: "credits", credit_action_id: completedAction.id },
+            });
+          } catch (error) {
+            const failedAction = await failXavierLocalAction(localAction, error);
+            throw new JarvisChatError(502, actionReadyMessage(failedAction));
+          }
         }
-        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
-        sseWrite(res, { type: "delta", text: reply });
-        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pptxgenjs.local"], executor: "claude", local_presentation: true });
-        recordXavierUsageEventDetached({
-          userId: context.persist ? context.userId : null,
-          requestId,
-          channel: "web",
-          eventName: "artifact_presentation",
-          status: "success",
-          provider: "local",
-          model: "pptxgenjs",
-          latencyMs: Date.now() - startedAt,
-          metadata: { route: "chat_stream", executor: "claude" },
-        });
       } else if (isPdfTaskRequest(userMessage)) {
-        const { reply, attachment } = await buildLocalPdfResult({
-          userId: context.userId,
-          taskId: `web-${context.conversation.id}-${Date.now()}`,
-          requestText: userMessage,
-          history,
-        });
-        if (context.persist) {
-          await appendXavierMessage({
-            userId: context.userId,
-            conversationId: context.conversation.id,
-            channel: "web",
-            role: "assistant",
-            content: reply,
-          });
-          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
-            console.warn("[xavier-memory] Claude PDF maintenance failed", (error as Error).message);
-          });
+        const localAction = await createLocalArtifactAction({ context, requestId, requestText: userMessage, kind: "pdf" });
+        if (localAction.metadata.credit_blocked === true) {
+          const reply = actionReadyMessage(localAction);
+          if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
+          sseWrite(res, { type: "delta", text: reply });
+          sseWrite(res, { type: "done", reply, tools_used: [], executor: "credits", approval_required: false, action_id: localAction.id, action_status: localAction.status, attachments: [] });
+        } else {
+          try {
+            const { reply: generatedReply, attachment } = await buildLocalPdfResult({
+              userId: context.userId,
+              taskId: `web-${context.conversation.id}-${Date.now()}`,
+              requestText: userMessage,
+              history,
+            });
+            const completedAction = await completeXavierLocalAction({ action: localAction, resultText: generatedReply, attachments: [localActionAttachment(attachment)] });
+            const reply = actionReadyMessage(completedAction);
+            if (context.persist) {
+              await appendXavierMessage({
+                userId: context.userId,
+                conversationId: context.conversation.id,
+                channel: "web",
+                role: "assistant",
+                content: reply,
+              });
+              await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+                console.warn("[xavier-memory] Claude PDF maintenance failed", (error as Error).message);
+              });
+            }
+            for (const item of completedAction.attachments) sseWrite(res, { type: "file", file_name: item.file_name, url: item.url, size_bytes: item.size_bytes });
+            sseWrite(res, { type: "delta", text: reply });
+            sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pdfkit.local"], executor: "credits", action_id: completedAction.id, action_status: completedAction.status, attachments: completedAction.attachments });
+            recordXavierUsageEventDetached({
+              userId: context.persist ? context.userId : null,
+              requestId,
+              channel: "web",
+              eventName: "artifact_pdf",
+              status: "success",
+              provider: "local",
+              model: "pdf",
+              latencyMs: Date.now() - startedAt,
+              metadata: { route: "chat_stream", executor: "credits", credit_action_id: completedAction.id },
+            });
+          } catch (error) {
+            const failedAction = await failXavierLocalAction(localAction, error);
+            throw new JarvisChatError(502, actionReadyMessage(failedAction));
+          }
         }
-        sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
-        sseWrite(res, { type: "delta", text: reply });
-        sseWrite(res, { type: "done", reply, tools_used: ["claude.messages", "pdfkit.local"], executor: "claude" });
-        recordXavierUsageEventDetached({
-          userId: context.persist ? context.userId : null,
-          requestId,
-          channel: "web",
-          eventName: "artifact_pdf",
-          status: "success",
-          provider: "local",
-          model: "pdf",
-          latencyMs: Date.now() - startedAt,
-          metadata: { route: "chat_stream", executor: "claude" },
-        });
       } else {
         sseWrite(res, { type: "tool_start", names: ["claude.messages", ...(fileEditRequested ? [] : ["claude.web_search"])] });
         const result = await generateClaudeReply({
