@@ -123,27 +123,70 @@ async function patchAction(action: XavierActionRequest, patch: Record<string, un
   return { ...rows[0], metadata: cleanJsonObject(rows[0].metadata), attachments: cleanAttachments(rows[0].attachments) };
 }
 
+function rawActionError(error: unknown): string {
+  const value = error instanceof Error ? error.message : String(error || "Falha desconhecida");
+  return value.replace(/Bearer\s+\S+/gi, "Bearer [redacted]").replace(/https?:\/\/[^\s]+/gi, (url) => url.split("?")[0]).slice(0, 600);
+}
+
+export function formatXavierActionFailure(error: unknown): string {
+  const raw = rawActionError(error);
+  const normalized = raw.toLowerCase();
+  if (/runway.*(?:401|403)|(?:401|403).*runway|unauthori[sz]ed|forbidden|invalid.*(?:api|secret).*key/.test(normalized)) {
+    return "A chave do Runway foi rejeitada. Verifique a RUNWAY_API_SECRET no projeto Vercel do Xavier e publique um novo deployment.";
+  }
+  if (/runway.*(?:402|credit|saldo|billing|payment)|(?:402|credit|saldo insuficiente|insufficient|payment required)/.test(normalized)) {
+    return "O saldo da API do Runway não foi suficiente para esta apresentação. Os créditos da API são separados da assinatura do aplicativo Runway; adicione créditos no portal de desenvolvedor ou compre créditos adicionais no Xavier para continuar.";
+  }
+  if (/runway.*(?:429|rate.?limit|too many requests)|(?:429|rate.?limit|too many requests).*runway/.test(normalized)) {
+    return "O Runway atingiu temporariamente o limite de solicitações. Aguarde alguns instantes e tente novamente; o Xavier não concedeu uma nova autorização nem repetirá a cobrança automaticamente.";
+  }
+  if (/runway.*(?:timeout|timed out|excedeu o tempo)|(?:timeout|timed out|excedeu o tempo).*runway/.test(normalized)) {
+    return "O Runway demorou além do limite para concluir a mídia. A ação foi encerrada sem nova tentativa automática; tente novamente em alguns instantes.";
+  }
+  if (/imagem da apresentação|pptx|apresenta(?:ção|cao)|supabase media|storage|signed url|download de mídia|formato de imagem/.test(normalized)) {
+    return `A mídia foi autorizada, mas não foi possível compor ou armazenar a apresentação. ${raw ? `Detalhe técnico: ${raw.slice(0, 300)}` : "Tente novamente em alguns instantes."}`;
+  }
+  if (/executor.*(?:não está configurado|nao esta configurado)|executor de ações/.test(normalized)) {
+    return "O executor seguro do Xavier ainda não está disponível em produção. Nenhum serviço externo foi acionado; fale com o administrador para revisar a configuração.";
+  }
+  if (/timeout|timed out|abort|network|fetch failed|econn|enotfound/.test(normalized)) {
+    return "O provedor não respondeu a tempo. A ação foi encerrada sem nova autorização; tente novamente em alguns instantes.";
+  }
+  return `A ação não foi concluída. ${raw ? `Detalhe técnico: ${raw.slice(0, 350)}` : "Tente novamente em alguns instantes."}`;
+}
+
+async function markActionFailed(action: XavierActionRequest, error: unknown): Promise<XavierActionRequest> {
+  const message = formatXavierActionFailure(error);
+  const patch = {
+    status: "failed" as const,
+    error_message: message,
+    result_text: message,
+    completed_at: new Date().toISOString(),
+  };
+  try {
+    return await patchAction(action, patch);
+  } catch (persistError) {
+    console.error("[xavier-actions] failed action persistence", { actionId: action.id, error: rawActionError(persistError) });
+    return { ...action, ...patch, attachments: [], updated_at: new Date().toISOString() };
+  }
+}
+
 export async function executeApprovedXavierActionRequest(action: XavierActionRequest): Promise<XavierActionRequest> {
   if (action.status !== "queued") return action;
   const isDirectRunwayAction = action.kind === "image" || action.kind === "video" || (action.kind === "presentation" && action.metadata.visual_presentation === true);
   if (isDirectRunwayAction && !isXavierRunwayConfigured()) {
-    return patchAction(action, {
-      status: "failed",
-      error_message: "O provedor Runway não está configurado no projeto Xavier. Adicione RUNWAY_API_SECRET no ambiente de produção e tente novamente.",
-      result_text: "A ação foi aprovada, mas não pôde ser executada porque o provedor de mídia ainda não está configurado.",
-      completed_at: new Date().toISOString(),
-    });
+    return markActionFailed(action, "O provedor Runway não está configurado no projeto Xavier. Adicione RUNWAY_API_SECRET no ambiente de produção e tente novamente.");
   }
   const url = executorUrl();
   if (!isDirectRunwayAction && !url) {
-    return patchAction(action, {
-      status: "failed",
-      error_message: "O executor externo do Xavier não está configurado no ambiente de produção.",
-      result_text: "A ação foi aprovada, mas o executor externo ainda não está configurado.",
-      completed_at: new Date().toISOString(),
-    });
+    return markActionFailed(action, "O executor externo do Xavier não está configurado no ambiente de produção.");
   }
-  const running = await patchAction(action, { status: "running" });
+  let running: XavierActionRequest;
+  try {
+    running = await patchAction(action, { status: "running" });
+  } catch (error) {
+    return markActionFailed(action, error);
+  }
   try {
     if (isDirectRunwayAction) {
       const result = action.kind === "presentation"
@@ -195,11 +238,7 @@ export async function executeApprovedXavierActionRequest(action: XavierActionReq
       ...(status === "completed" || status === "failed" ? { completed_at: new Date().toISOString() } : {}),
     });
   } catch (error) {
-    return patchAction(running, {
-      status: "failed",
-      error_message: String((error as Error).message || "Falha no executor de ações").slice(0, 2_000),
-      completed_at: new Date().toISOString(),
-    });
+    return markActionFailed(running, error);
   }
 }
 
@@ -294,11 +333,24 @@ export async function createXavierActionRequest(input: {
   return { ...rows[0], metadata: cleanJsonObject(rows[0].metadata), attachments: cleanAttachments(rows[0].attachments) };
 }
 
+const ACTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ACTION_CODE_PATTERN = /^XAV-[0-9A-F]{8}$/i;
+
+export function getXavierActionReferenceFilter(reference?: string | null): { field: "id" | "approval_code"; value: string } | null {
+  const trimmed = reference?.trim() || "";
+  if (!trimmed) return null;
+  if (ACTION_ID_PATTERN.test(trimmed)) return { field: "id", value: trimmed };
+  const normalized = trimmed.toUpperCase();
+  if (ACTION_CODE_PATTERN.test(normalized)) return { field: "approval_code", value: normalized };
+  return null;
+}
+
 async function findPendingAction(userId: string, reference?: string | null): Promise<XavierActionRequest | null> {
   const params = new URLSearchParams({ select: ACTION_SELECT, user_id: `eq.${userId}`, status: "eq.pending_approval", order: "created_at.desc", limit: "1" });
   if (reference) {
-    const normalized = reference.toUpperCase();
-    params.set("or", `(id.eq.${reference},approval_code.eq.${normalized})`);
+    const filter = getXavierActionReferenceFilter(reference);
+    if (!filter) return null;
+    params.set(filter.field, `eq.${filter.value}`);
   }
   const rows = await readRows<XavierActionRequest>(await supabaseRequest(`${ACTION_TABLE}?${params}`), "pending action lookup");
   return rows[0] ? { ...rows[0], metadata: cleanJsonObject(rows[0].metadata), attachments: cleanAttachments(rows[0].attachments) } : null;
@@ -345,7 +397,7 @@ export function actionReadyMessage(action: XavierActionRequest): string {
       : `A solicitação “${action.title}” foi concluída e os arquivos estão disponíveis nesta sessão.`;
   }
   if (action.status === "failed") {
-    return `Não foi possível concluir “${action.title}” nesta tentativa. Nenhuma nova autorização foi concedida. Motivo: ${(action.error_message || "o provedor autorizado não respondeu").slice(0, 500)}`;
+    return `Não foi possível concluir “${action.title}” nesta tentativa. Nenhuma nova autorização foi concedida. ${action.error_message || "O provedor autorizado não respondeu."}`;
   }
   if (action.status === "running") return `A solicitação “${action.title}” está em execução no provedor autorizado. O Xavier retornará o resultado nesta mesma sessão.`;
   if (action.status === "queued") return `A solicitação “${action.title}” foi autorizada e entrou na fila segura. Nenhum recurso externo será acionado fora do provedor autorizado.`;

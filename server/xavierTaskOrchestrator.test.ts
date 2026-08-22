@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   approvalReference,
+  getXavierActionReferenceFilter,
   classifyXavierTaskRequest,
   isXavierApprovalCommand,
   isXavierCancellationCommand,
+  formatXavierActionFailure,
 } from "./xavierTaskOrchestrator.js";
 
 describe("Xavier task orchestrator", () => {
@@ -31,5 +33,18 @@ describe("Xavier task orchestrator", () => {
     expect(isXavierCancellationCommand("cancelar XAV-ABC12345")).toBe(true);
     expect(approvalReference("aprovar XAV-ABC12345")).toBe("XAV-ABC12345");
     expect(isXavierApprovalCommand("aprovar tudo")).toBe(false);
+  });
+
+  it("resolve códigos XAV e UUIDs com filtros de coluna distintos", () => {
+    expect(getXavierActionReferenceFilter("aprovar XAV-ABC12345")).toBeNull();
+    expect(getXavierActionReferenceFilter(" XAV-ABC12345 ")).toEqual({ field: "approval_code", value: "XAV-ABC12345" });
+    expect(getXavierActionReferenceFilter("39813673-0609-4d48-bed9-3006c96cdd77")).toEqual({ field: "id", value: "39813673-0609-4d48-bed9-3006c96cdd77" });
+  });
+
+  it("converte falhas conhecidas em mensagens acionáveis", () => {
+    expect(formatXavierActionFailure(new Error("Runway 402: insufficient credits"))).toContain("saldo da API do Runway");
+    expect(formatXavierActionFailure(new Error("Runway 429 rate limit"))).toContain("limite de solicitações");
+    expect(formatXavierActionFailure(new Error("Runway 401 invalid API key"))).toContain("chave do Runway foi rejeitada");
+    expect(formatXavierActionFailure(new Error("PPTX image format unsupported"))).toContain("compor ou armazenar a apresentação");
   });
 });

@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import sharp from "sharp";
 import { getSupabaseAdminKey } from "./supabaseAdmin.js";
 
 const require = createRequire(import.meta.url);
@@ -142,9 +143,34 @@ async function imageUrlToDataUri(url: string): Promise<string> {
   if (contentLength > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação excede 8 MB");
   const bytes = Buffer.from(await response.arrayBuffer());
   if (!bytes.length || bytes.length > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação está vazia ou excede 8 MB");
-  const contentType = (response.headers.get("content-type") || "image/png").split(";", 1)[0].toLowerCase();
-  if (!/^image\/(png|jpe?g|webp|gif)$/i.test(contentType)) throw new Error(`Formato de imagem não suportado no PPTX: ${contentType}`);
-  return `data:${contentType};base64,${bytes.toString("base64")}`;
+
+  const headerType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
+  let detectedFormat: string | undefined;
+  try {
+    detectedFormat = (await sharp(bytes, { animated: false }).metadata()).format;
+  } catch {
+    detectedFormat = undefined;
+  }
+
+  const format = detectedFormat || ({
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  } as Record<string, string>)[headerType];
+  if (!format || !["png", "jpeg", "webp", "gif"].includes(format)) {
+    throw new Error(`Formato de imagem não suportado no PPTX: ${headerType || "desconhecido"}`);
+  }
+
+  let output = bytes;
+  let mime = format === "jpeg" ? "image/jpeg" : `image/${format}`;
+  if (format === "webp" || format === "gif") {
+    output = await sharp(bytes, { animated: false }).png().toBuffer();
+    mime = "image/png";
+  }
+  if (!output.length || output.length > MAX_IMAGE_SIZE) throw new Error("A imagem normalizada da apresentação excede 8 MB");
+  return `data:${mime};base64,${output.toString("base64")}`;
 }
 
 function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance["addSlide"]>, index: number): void {

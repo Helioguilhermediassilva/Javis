@@ -433,7 +433,21 @@ async function processPerUserTelegramMessage(input: {
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
       await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
-      await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
+      try {
+        await sendXavierTelegramDocument(connection, chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
+      } catch (error) {
+        console.error("[telegram:xavier] generated artifact delivery failed", {
+          connectionId: connection.id,
+          updateId: update.update_id,
+          fileName: attachment.file_name,
+          error: (error as Error).message,
+        });
+        try {
+          await sendXavierTelegramMessage(connection, chatId, "O arquivo foi gerado, mas o Telegram não conseguiu anexá-lo nesta tentativa. Verifique se o bot pode enviar documentos e solicite o arquivo novamente.");
+        } catch (notificationError) {
+          console.error("[telegram:xavier] artifact delivery notification failed", (notificationError as Error).message);
+        }
+      }
       return;
     }
 
@@ -480,12 +494,14 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
   languageUpdated: string;
   audioUnavailable: string;
   quotaExceeded: string;
+  actionNotFound: string;
   temporaryFailure: string;
   researchStarted: string;
   researchFailure: string;
   researchUnavailable: string;
   claudeUnavailable: string;
   crmFallback: string;
+  artifactDeliveryFailed: string;
 }> = {
   pt: {
     linkRequired: "Para usar o Xavier, abra o cockpit em https://jarvisnowgo.com/telegram-connect, gere o vínculo e escaneie o QR Code ou abra o link. Toque em Iniciar para concluir automaticamente.",
@@ -497,12 +513,14 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     languageUpdated: "Idioma atualizado. A partir de agora responderei nesse idioma.",
     audioUnavailable: "Senhor, não consegui ouvir esse áudio. Tente enviar uma gravação mais curta e nítida.",
     quotaExceeded: "Senhor, o limite mensal desta conta foi atingido. Ajuste-o no painel web para continuar.",
+    actionNotFound: "Não encontrei uma solicitação pendente para esse código nesta sessão. Verifique o código e tente novamente, senhor.",
     temporaryFailure: "Senhor, encontrei uma falha temporária ao processar sua solicitação. Tente novamente em instantes.",
     researchStarted: "Entendi o áudio. Vou pesquisar agora e já retorno com as fontes.",
     researchFailure: "Consegui ouvir o áudio, mas a pesquisa demorou além do limite. Tente novamente com uma pergunta mais curta.",
     researchUnavailable: "Consegui ouvir o áudio, mas a pesquisa não pôde ser concluída agora. Tente novamente em instantes.",
     claudeUnavailable: "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.",
     crmFallback: "Registro CRM processado.",
+    artifactDeliveryFailed: "O arquivo foi gerado, mas o Telegram não conseguiu anexá-lo nesta tentativa. Verifique se o bot pode enviar documentos e solicite o arquivo novamente.",
   },
   en: {
     linkRequired: "To use Xavier, open https://jarvisnowgo.com/telegram-connect, generate the link, then scan the QR Code or open it and tap Start to finish automatically.",
@@ -514,12 +532,14 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     languageUpdated: "Language updated. I will reply in this language from now on.",
     audioUnavailable: "Sir, I could not hear that audio. Try sending a shorter, clearer recording.",
     quotaExceeded: "Sir, this account has reached its monthly limit. Adjust it in the web panel to continue.",
+    actionNotFound: "I could not find a pending request for this code in this session. Check the code and try again.",
     temporaryFailure: "Sir, I encountered a temporary failure while processing your request. Please try again shortly.",
     researchStarted: "I understood the audio. I will search now and return with the sources.",
     researchFailure: "I understood the audio, but the search took too long. Please try again with a shorter question.",
     researchUnavailable: "I understood the audio, but the search could not be completed right now. Please try again shortly.",
     claudeUnavailable: "Sir, Claude is not configured on the server yet. Configure ANTHROPIC_API_KEY in Vercel and redeploy.",
     crmFallback: "CRM record processed.",
+    artifactDeliveryFailed: "The file was generated, but Telegram could not attach it this time. Check that the bot can send documents and request the file again.",
   },
   es: {
     linkRequired: "Para usar Xavier, abre https://jarvisnowgo.com/telegram-connect, genera el vínculo, escanea el código QR o abre el enlace y toca Iniciar para finalizar automáticamente.",
@@ -531,12 +551,14 @@ const OFFICIAL_TELEGRAM_MESSAGES: Record<OfficialTelegramLocale, {
     languageUpdated: "Idioma actualizado. A partir de ahora responderé en este idioma.",
     audioUnavailable: "Señor, no pude escuchar ese audio. Intenta enviar una grabación más corta y nítida.",
     quotaExceeded: "Señor, esta cuenta alcanzó su límite mensual. Ajústalo en el panel web para continuar.",
+    actionNotFound: "No encontré una solicitud pendiente para este código en esta sesión. Verifica el código e inténtalo de nuevo.",
     temporaryFailure: "Señor, encontré un fallo temporal al procesar tu solicitud. Inténtalo de nuevo en unos instantes.",
     researchStarted: "Entendí el audio. Voy a buscar ahora y volveré con las fuentes.",
     researchFailure: "Entendí el audio, pero la búsqueda tardó demasiado. Inténtalo de nuevo con una pregunta más corta.",
     researchUnavailable: "Entendí el audio, pero la búsqueda no pudo completarse ahora. Inténtalo de nuevo en unos instantes.",
     claudeUnavailable: "Señor, Claude todavía no está configurado en el servidor. Configura ANTHROPIC_API_KEY en Vercel y vuelve a desplegar.",
     crmFallback: "Registro CRM procesado.",
+    artifactDeliveryFailed: "El archivo fue generado, pero Telegram no pudo adjuntarlo en este intento. Verifique que el bot pueda enviar documentos y solicite el archivo nuevamente.",
   },
 };
 
@@ -639,7 +661,7 @@ async function processOfficialTelegramMessage(input: {
         : await cancelXavierActionRequest(link.user_id, actionReference);
       const reply = action
         ? actionReadyMessage(action)
-        : officialTelegramText(locale, "temporaryFailure");
+        : officialTelegramText(locale, "actionNotFound");
       await appendXavierMessage({
         userId: link.user_id,
         conversationId: conversation.id,
@@ -763,7 +785,21 @@ async function processOfficialTelegramMessage(input: {
       });
       await sendOfficialTelegramText(chatId, reply);
       await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
-      await sendOfficialTelegramDocument(chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
+      try {
+        await sendOfficialTelegramDocument(chatId, attachment.url, `Arquivo gerado pelo Xavier: ${attachment.file_name}`, attachment.file_name);
+      } catch (error) {
+        console.error("[telegram:official] generated artifact delivery failed", {
+          userId: link.user_id,
+          updateId: update.update_id,
+          fileName: attachment.file_name,
+          error: (error as Error).message,
+        });
+        try {
+          await sendOfficialTelegramText(chatId, officialTelegramText(locale, "artifactDeliveryFailed"));
+        } catch (notificationError) {
+          console.error("[telegram:official] artifact delivery notification failed", (notificationError as Error).message);
+        }
+      }
       return;
     }
 
