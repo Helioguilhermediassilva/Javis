@@ -69,11 +69,13 @@ describe("Xavier task orchestrator", () => {
   });
 
   it("converte falhas conhecidas em mensagens acionáveis", () => {
-    expect(formatXavierActionFailure(new Error("Runway 402: insufficient credits"))).toContain("saldo da API do Runway");
-    expect(formatXavierActionFailure(new Error("Runway 429 rate limit"))).toContain("limite de solicitações");
-    expect(formatXavierActionFailure(new Error("Runway 401 invalid API key"))).toContain("chave do Runway foi rejeitada");
-    expect(formatXavierActionFailure(new Error("PPTX image format unsupported"))).toContain("compor ou armazenar a apresentação");
-    expect(formatXavierActionFailure(new Error("Supabase storage upload 413: EntityTooLarge"))).toContain("capacidade do armazenamento precisará ser ampliada");
-    expect(formatXavierActionFailure(new Error("Supabase storage upload 413: EntityTooLarge"))).not.toContain("EntityTooLarge");
+    expect(formatXavierActionFailure(new Error("Runway 402: insufficient credits"))).toContain("atingiu o limite de uso");
+    expect(formatXavierActionFailure(new Error("Runway 429 rate limit"))).toContain("recebendo muitas solicitações");
+    expect(formatXavierActionFailure(new Error("Runway 401 invalid API key"))).toContain("criação visual está temporariamente indisponível");
+    expect(formatXavierActionFailure(new Error("PPTX image format unsupported"))).toContain("apresentação visual não ficou pronta");
+    const oversized = formatXavierActionFailure(new Error("Supabase storage upload 413: EntityTooLarge"));
+    expect(oversized).toContain("arquivo temporário ficou grande demais");
+    expect(oversized).toContain("Nenhum crédito foi consumido");
+    expect(oversized).not.toMatch(/EntityTooLarge|Supabase|Storage|capacidade.*ampliada/i);
   });
 });

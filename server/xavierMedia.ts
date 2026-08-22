@@ -1,5 +1,5 @@
 import type { XavierActionAttachment, XavierActionRequest } from "./xavierTaskOrchestrator.js";
-import { createXavierPresentationAttachment } from "./xavierPresentation.js";
+import { createXavierPresentationAttachment, createXavierTransientPresentationArtifact } from "./xavierPresentation.js";
 
 const RUNWAY_API_BASE_URL = (process.env.RUNWAY_API_BASE_URL || "https://api.dev.runwayml.com").replace(/\/+$/, "");
 const RUNWAY_API_SECRET = (process.env.RUNWAY_API_SECRET || process.env.RUNWAYML_API_SECRET || "").trim();
@@ -68,6 +68,18 @@ const RUNWAY_VIDEO_DURATION = clampDuration(Number(process.env.RUNWAY_VIDEO_DURA
 export interface XavierRunwayMediaResult {
   result_text: string;
   attachments: XavierActionAttachment[];
+}
+
+export interface XavierTransientMediaArtifact {
+  file_name: string;
+  bytes: Buffer;
+  mime_type: string;
+  size_bytes: number;
+}
+
+export interface XavierTransientVisualPresentationResult {
+  result_text: string;
+  artifacts: XavierTransientMediaArtifact[];
 }
 
 interface RunwayTaskResponse {
@@ -325,6 +337,23 @@ export async function executeXavierRunwayMediaAction(action: XavierActionRequest
   };
 }
 
+function mediaExtension(mimeType: string, fallback: string): string {
+  if (mimeType.includes("webp")) return "webp";
+  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return "jpg";
+  if (mimeType.includes("png")) return "png";
+  if (mimeType.includes("webm")) return "webm";
+  if (mimeType.includes("mp4")) return "mp4";
+  return fallback;
+}
+
+async function requestRunwayImageBytes(input: { prompt: string; referenceImages?: string[] }): Promise<{ buffer: Buffer; mimeType: string }> {
+  const taskId = await createRunwayTask("/v1/text_to_image", textToImagePayload(input.prompt, input.referenceImages?.slice(0, MAX_REFERENCE_IMAGES) || []));
+  const completed = await waitForRunwayTask(taskId, 100_000);
+  const outputUrl = normalizeOutputUrls(completed.output)[0];
+  if (!outputUrl) throw new Error("Runway concluiu a imagem sem retornar uma URL de saída");
+  return downloadMedia(outputUrl);
+}
+
 export async function executeXavierVisualPresentationAction(action: XavierActionRequest): Promise<XavierRunwayMediaResult> {
   const references = actionReferenceImageUrls(action);
   const image = await generateXavierRunwayImage({
@@ -343,6 +372,31 @@ export async function executeXavierVisualPresentationAction(action: XavierAction
   return {
     result_text: "A imagem foi gerada e incorporada dentro da apresentação. Os dois arquivos foram armazenados na sessão privada do Xavier.",
     attachments: [image, presentation],
+  };
+}
+
+export async function executeXavierTransientVisualPresentationAction(action: XavierActionRequest): Promise<XavierTransientVisualPresentationResult> {
+  const references = actionReferenceImageUrls(action);
+  const image = await requestRunwayImageBytes({
+    prompt: `Crie uma imagem profissional para compor uma apresentação sobre: ${action.request_text}. Não inclua texto ilegível na imagem; privilegie composição visual, clareza e aparência adequada para slides.`,
+    referenceImages: references,
+  });
+  const imageExtension = mediaExtension(image.mimeType, "png");
+  const imageArtifact: XavierTransientMediaArtifact = {
+    file_name: `xavier-imagem-${safePart(action.id, "visual")}.${imageExtension}`,
+    bytes: image.buffer,
+    mime_type: image.mimeType,
+    size_bytes: image.buffer.length,
+  };
+  const outline = `# ${action.title}\n\n## Objetivo\n- ${action.request_text}\n\n## Direção visual\n- Imagem principal gerada por um provedor visual especializado e incorporada nesta apresentação.\n\n## Próximos passos\n- Revisar o conteúdo e adaptar os slides conforme a identidade visual desejada.`;
+  const presentation = await createXavierTransientPresentationArtifact({
+    title: action.title,
+    outline,
+    imageBuffers: [{ bytes: image.buffer, mime_type: image.mimeType }],
+  });
+  return {
+    result_text: "A apresentação foi composta com uma imagem profissional e está pronta para ser enviada neste chat.",
+    artifacts: [imageArtifact, presentation],
   };
 }
 

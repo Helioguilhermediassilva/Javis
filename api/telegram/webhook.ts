@@ -289,6 +289,18 @@ async function sendOfficialActionAttachments(chatId: string, attachments: Array<
   }
 }
 
+async function sendLinkedTransientArtifacts(connection: XavierTelegramConnection, chatId: string, artifacts: TelegramTransientArtifact[]): Promise<void> {
+  for (const artifact of artifacts.slice(0, 8)) {
+    await sendXavierTelegramDocumentBytes(connection, chatId, artifact.bytes, artifact.mime_type, `Arquivo gerado pelo Xavier: ${artifact.file_name}`, artifact.file_name);
+  }
+}
+
+async function sendOfficialTransientArtifacts(chatId: string, artifacts: TelegramTransientArtifact[]): Promise<void> {
+  for (const artifact of artifacts.slice(0, 8)) {
+    await sendOfficialTelegramDocumentBytes(chatId, artifact.bytes, artifact.mime_type, `Arquivo gerado pelo Xavier: ${artifact.file_name}`, artifact.file_name);
+  }
+}
+
 async function persistTelegramImageReference(input: {
   token: string;
   userId: string;
@@ -383,7 +395,9 @@ async function processPerUserTelegramMessage(input: {
     const actionReference = approvalReference(text);
     if (isXavierApprovalCommand(text) || isXavierCancellationCommand(text)) {
       const action = isXavierApprovalCommand(text)
-        ? await approveXavierActionRequest(connection.user_id, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+        ? await approveXavierActionRequest(connection.user_id, actionReference).then((approved) => approved
+          ? executeApprovedXavierActionRequest(approved, { deliverTransientArtifacts: (artifacts) => sendLinkedTransientArtifacts(connection, chatId, artifacts) })
+          : null)
         : await cancelXavierActionRequest(connection.user_id, actionReference);
       const reply = action
         ? actionReadyMessage(action)
@@ -414,7 +428,7 @@ async function processPerUserTelegramMessage(input: {
         metadata: { has_audio: Boolean(audio), bot_mode: "linked", reference_image_urls: referenceImageUrls, plan: profile.plan },
       });
       const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
-        ? await executeApprovedXavierActionRequest(action)
+        ? await executeApprovedXavierActionRequest(action, { deliverTransientArtifacts: (artifacts) => sendLinkedTransientArtifacts(connection, chatId, artifacts) })
         : action;
       const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
         ? approvalPrompt(executedAction)
@@ -784,7 +798,9 @@ async function processOfficialTelegramMessage(input: {
     const actionReference = approvalReference(text);
     if (isXavierApprovalCommand(text) || isXavierCancellationCommand(text)) {
       const action = isXavierApprovalCommand(text)
-        ? await approveXavierActionRequest(link.user_id, actionReference).then((approved) => approved ? executeApprovedXavierActionRequest(approved) : null)
+        ? await approveXavierActionRequest(link.user_id, actionReference).then((approved) => approved
+          ? executeApprovedXavierActionRequest(approved, { deliverTransientArtifacts: (artifacts) => sendOfficialTransientArtifacts(chatId, artifacts) })
+          : null)
         : await cancelXavierActionRequest(link.user_id, actionReference);
       const reply = action
         ? actionReadyMessage(action)
@@ -814,7 +830,7 @@ async function processOfficialTelegramMessage(input: {
         metadata: { has_audio: Boolean(audio), bot_mode: "official", locale, reference_image_urls: referenceImageUrls, plan: profile.plan },
       });
       const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
-        ? await executeApprovedXavierActionRequest(action)
+        ? await executeApprovedXavierActionRequest(action, { deliverTransientArtifacts: (artifacts) => sendOfficialTransientArtifacts(chatId, artifacts) })
         : action;
       const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
         ? approvalPrompt(executedAction)

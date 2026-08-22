@@ -190,16 +190,9 @@ function formatBytes(bytes: number): string {
   return `${Math.ceil(bytes / 1024)} KB`;
 }
 
-async function imageUrlToDataUri(url: string): Promise<string> {
-  if (!/^https:\/\//i.test(url)) throw new Error("A imagem da apresentação precisa usar uma URL HTTPS");
-  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) throw new Error(`Falha ao baixar imagem da apresentação (${response.status})`);
-  const contentLength = Number(response.headers.get("content-length") || 0);
-  if (contentLength > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação excede 8 MB");
-  const bytes = Buffer.from(await response.arrayBuffer());
+async function imageBufferToDataUri(bytes: Buffer, headerType = ""): Promise<string> {
   if (!bytes.length || bytes.length > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação está vazia ou excede 8 MB");
 
-  const headerType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
   let metadata: Metadata;
   try {
     metadata = await sharp(bytes, { animated: false }).metadata();
@@ -245,16 +238,35 @@ async function imageUrlToDataUri(url: string): Promise<string> {
   throw new Error(`A imagem otimizada da apresentação excede ${formatBytes(MAX_EMBED_IMAGE_BYTES)}`);
 }
 
+async function imageUrlToDataUri(url: string): Promise<string> {
+  if (!/^https:\/\//i.test(url)) throw new Error("A imagem da apresentação precisa usar uma URL HTTPS");
+  const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) throw new Error(`Falha ao baixar imagem da apresentação (${response.status})`);
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > MAX_IMAGE_SIZE) throw new Error("A imagem da apresentação excede 8 MB");
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const headerType = (response.headers.get("content-type") || "").split(";", 1)[0].toLowerCase();
+  return imageBufferToDataUri(bytes, headerType);
+}
+
 function addFooter(pptx: PptxGenJsInstance, slide: ReturnType<PptxGenJsInstance["addSlide"]>, index: number): void {
   slide.addShape(pptx.ShapeType.line, { x: 0.65, y: 7.08, w: 12.0, h: 0, line: { color: "1F3A4D", width: 0.7 } });
   slide.addText("XAVIER | INTELIGÊNCIA SOBERANA", { x: 0.7, y: 7.15, w: 4.2, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", margin: 0 });
   slide.addText(String(index), { x: 12.1, y: 7.15, w: 0.45, h: 0.18, fontFace: "Aptos", fontSize: 6.8, color: "83A3B4", align: "right", margin: 0 });
 }
 
-export async function renderXavierPresentationBuffer(title: string, outline: string, imageUrls: string[] = []): Promise<Buffer> {
+export async function renderXavierPresentationBuffer(
+  title: string,
+  outline: string,
+  imageUrls: string[] = [],
+  imageBuffers: Array<{ bytes: Buffer; mime_type?: string }> = [],
+): Promise<Buffer> {
   const parsed = parsePresentationOutline(outline, title);
   const normalizedImageUrls = Array.from(new Set(imageUrls.filter((url) => /^https:\/\//i.test(url))));
-  const imageData = await Promise.all(normalizedImageUrls.map((url) => imageUrlToDataUri(url)));
+  const imageData = await Promise.all([
+    ...normalizedImageUrls.map((url) => imageUrlToDataUri(url)),
+    ...imageBuffers.map((item) => imageBufferToDataUri(item.bytes, item.mime_type || "")),
+  ]);
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
   pptx.author = "Xavier - Inteligência Soberana";
@@ -301,8 +313,9 @@ export async function createXavierTransientPresentationArtifact(input: {
   title: string;
   outline: string;
   imageUrls?: string[];
+  imageBuffers?: Array<{ bytes: Buffer; mime_type?: string }>;
 }): Promise<XavierTransientPresentationArtifact> {
-  const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || []);
+  const pptx = await renderXavierPresentationBuffer(input.title, input.outline, input.imageUrls || [], input.imageBuffers || []);
   if (MAX_PRESENTATION_SIZE > 0 && pptx.length > MAX_PRESENTATION_SIZE) {
     throw new Error(`A apresentação excedeu o limite técnico transitório configurado (${formatBytes(MAX_PRESENTATION_SIZE)})`);
   }

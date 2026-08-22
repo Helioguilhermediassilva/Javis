@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { XavierPlan } from "./xavierEntitlements.js";
 import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
-import { executeXavierRunwayMediaAction, executeXavierVisualPresentationAction, isXavierRunwayConfigured } from "./xavierMedia.js";
+import {
+  executeXavierRunwayMediaAction,
+  executeXavierTransientVisualPresentationAction,
+  executeXavierVisualPresentationAction,
+  isXavierRunwayConfigured,
+  type XavierTransientMediaArtifact,
+} from "./xavierMedia.js";
 import { captureXavierCredits, creditBlockedMessage, creditLowBalanceMessage, releaseXavierCredits, reserveXavierCredits } from "./xavierCredits.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
@@ -20,6 +26,8 @@ export interface XavierActionAttachment {
   size_bytes?: number;
   mime_type?: string;
 }
+
+export type XavierTransientArtifactDelivery = (artifacts: XavierTransientMediaArtifact[]) => Promise<void>;
 
 export interface XavierActionRequest {
   id: string;
@@ -134,30 +142,30 @@ export function formatXavierActionFailure(error: unknown): string {
   const raw = rawActionError(error);
   const normalized = normalize(raw);
   if (/runway.*(?:401|403)|(?:401|403).*runway|unauthori[sz]ed|forbidden|invalid.*(?:api|secret).*key/.test(normalized)) {
-    return "A chave do Runway foi rejeitada. Verifique a RUNWAY_API_SECRET no projeto Vercel do Xavier e publique um novo deployment.";
+    return "A criação visual está temporariamente indisponível. Nenhum crédito foi consumido. Tente novamente mais tarde.";
   }
   if (/runway.*(?:402|credit|saldo|billing|payment)|(?:402|credit|saldo insuficiente|insufficient|payment required)/.test(normalized)) {
-    return "O saldo da API do Runway não foi suficiente para esta apresentação. Os créditos da API são separados da assinatura do aplicativo Runway; adicione créditos no portal de desenvolvedor ou compre créditos adicionais no Xavier para continuar.";
+    return "O serviço de criação visual atingiu o limite de uso neste momento. Nenhum crédito foi consumido. Tente novamente mais tarde.";
   }
   if (/runway.*(?:429|rate.?limit|too many requests)|(?:429|rate.?limit|too many requests).*runway/.test(normalized)) {
-    return "O Runway atingiu temporariamente o limite de solicitações. Aguarde alguns instantes e tente novamente; o Xavier não concedeu uma nova autorização nem repetirá a cobrança automaticamente.";
+    return "O serviço de criação visual está recebendo muitas solicitações. Nenhum crédito foi consumido. Aguarde alguns instantes e tente novamente.";
   }
   if (/runway.*(?:timeout|timed out|excedeu o tempo)|(?:timeout|timed out|excedeu o tempo).*runway/.test(normalized)) {
-    return "O Runway demorou além do limite para concluir a mídia. A ação foi encerrada sem nova tentativa automática; tente novamente em alguns instantes.";
+    return "A criação visual demorou mais do que o esperado. Nenhum crédito foi consumido. Tente novamente em alguns instantes.";
   }
   if (/413|payload too large|entitytoolarge|tamanho acima do limite|maximum allowed size|limite tecnico deste arquivo/.test(normalized) && /imagem da apresentação|pptx|apresenta(?:ção|cao)|storage|upload/.test(normalized)) {
-    return "A apresentação atingiu o limite técnico do armazenamento disponível. A ação foi encerrada sem nova cobrança e não será repetida automaticamente; tente novamente em instantes e, se persistir, a capacidade do armazenamento precisará ser ampliada.";
+    return "Não consegui finalizar esta apresentação porque o arquivo temporário ficou grande demais para ser enviado com segurança. Nenhum crédito foi consumido. Tente novamente com uma versão mais enxuta ou com menos imagens.";
   }
   if (/imagem da apresentação|pptx|apresenta(?:ção|cao)|supabase media|storage|signed url|download de mídia|formato de imagem/.test(normalized)) {
-    return `A mídia foi autorizada, mas não foi possível compor ou armazenar a apresentação. ${raw ? `Detalhe técnico: ${raw.slice(0, 300)}` : "Tente novamente em alguns instantes."}`;
+    return "A apresentação visual não ficou pronta desta vez. Nenhum crédito foi consumido. Tente novamente em alguns instantes; se preferir, peça uma versão mais enxuta ou com menos imagens.";
   }
   if (/executor.*(?:não está configurado|nao esta configurado)|executor de ações/.test(normalized)) {
-    return "O executor seguro do Xavier ainda não está disponível em produção. Nenhum serviço externo foi acionado; fale com o administrador para revisar a configuração.";
+    return "O Xavier ainda está finalizando uma configuração necessária para esta função. Nenhum crédito foi consumido. Tente novamente mais tarde.";
   }
   if (/timeout|timed out|abort|network|fetch failed|econn|enotfound/.test(normalized)) {
-    return "O provedor não respondeu a tempo. A ação foi encerrada sem nova autorização; tente novamente em alguns instantes.";
+    return "O serviço não respondeu a tempo. Nenhum crédito foi consumido. Tente novamente em alguns instantes.";
   }
-  return `A ação não foi concluída. ${raw ? `Detalhe técnico: ${raw.slice(0, 350)}` : "Tente novamente em alguns instantes."}`;
+  return "Não consegui concluir esta solicitação agora. Nenhum crédito foi consumido. Tente novamente em alguns instantes.";
 }
 
 async function markActionFailed(action: XavierActionRequest, error: unknown): Promise<XavierActionRequest> {
@@ -207,7 +215,10 @@ export async function failXavierLocalAction(action: XavierActionRequest, error: 
   return markActionFailed(action, error);
 }
 
-export async function executeApprovedXavierActionRequest(action: XavierActionRequest): Promise<XavierActionRequest> {
+export async function executeApprovedXavierActionRequest(
+  action: XavierActionRequest,
+  options: { deliverTransientArtifacts?: XavierTransientArtifactDelivery } = {},
+): Promise<XavierActionRequest> {
   if (action.status !== "queued") return action;
   const isDirectRunwayAction = action.kind === "image" || action.kind === "video" || (action.kind === "presentation" && action.metadata.visual_presentation === true);
   if (isDirectRunwayAction && !isXavierRunwayConfigured()) {
@@ -225,6 +236,31 @@ export async function executeApprovedXavierActionRequest(action: XavierActionReq
   }
   try {
     if (isDirectRunwayAction) {
+      const isTransientTelegramPresentation = action.channel === "telegram"
+        && action.kind === "presentation"
+        && action.metadata.visual_presentation === true;
+      if (isTransientTelegramPresentation) {
+        if (!options.deliverTransientArtifacts) {
+          throw new Error("A entrega transitória da apresentação visual não foi configurada para este canal");
+        }
+        const result = await executeXavierTransientVisualPresentationAction(running);
+        await options.deliverTransientArtifacts(result.artifacts);
+        const completed = await patchAction(running, {
+          status: "completed",
+          result_text: result.result_text,
+          attachments: [],
+          metadata: {
+            ...running.metadata,
+            telegram_transient_artifact: true,
+            artifact_delivery: "telegram_multipart",
+            artifact_count: result.artifacts.length,
+            artifact_sizes: result.artifacts.map((artifact) => artifact.size_bytes),
+          },
+          completed_at: new Date().toISOString(),
+        });
+        await captureXavierCredits(completed);
+        return completed;
+      }
       const result = action.kind === "presentation"
         ? await executeXavierVisualPresentationAction(running)
         : await executeXavierRunwayMediaAction(running);
@@ -496,10 +532,10 @@ export function actionReadyMessage(action: XavierActionRequest): string {
     return `${base}${transientTelegramNote}${creditLowBalanceMessage(action)}`;
   }
   if (action.status === "failed") {
-    return `Não foi possível concluir “${action.title}” nesta tentativa. Nenhuma nova autorização foi concedida. ${action.error_message || "O provedor autorizado não respondeu."}`;
+    return `Não consegui concluir “${action.title}” desta vez.\n\n${action.error_message || "Nenhum crédito foi consumido. Tente novamente em alguns instantes."}`;
   }
-  if (action.status === "running") return `A solicitação “${action.title}” está em execução no provedor autorizado. O Xavier retornará o resultado nesta mesma sessão.`;
-  if (action.status === "queued") return `A solicitação “${action.title}” foi autorizada e entrou na fila segura. Nenhum recurso externo será acionado fora do provedor autorizado.`;
-  if (action.status === "cancelled") return `A solicitação “${action.title}” foi cancelada e nenhum recurso externo foi acionado.`;
+  if (action.status === "running") return `Estou preparando “${action.title}”. O resultado será enviado nesta mesma sessão assim que estiver pronto.`;
+  if (action.status === "queued") return `“${action.title}” foi autorizada e está sendo processada. O Xavier enviará o resultado nesta mesma sessão assim que terminar.`;
+  if (action.status === "cancelled") return `“${action.title}” foi cancelada. Nenhum crédito foi consumido.`;
   return approvalPrompt(action);
 }
