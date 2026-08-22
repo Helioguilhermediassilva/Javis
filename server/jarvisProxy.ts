@@ -673,6 +673,7 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
 
 interface AuthenticatedWebChatContext {
   userId: string;
+  plan: "individual" | "pro" | "business";
   conversation: XavierConversation;
   history: ChatMessage[];
   summary: string | null;
@@ -852,7 +853,7 @@ async function persistFileEditIfRequested(input: {
 
 async function prepareAuthenticatedWebChat(req: IncomingMessage): Promise<AuthenticatedWebChatContext> {
   if (isTestCompatibilityRequest(req)) {
-    return { userId: "test-user", conversation: { id: "test-conversation" } as XavierConversation, history: [], summary: null, retentionDays: 90, persist: false };
+    return { userId: "test-user", plan: "individual", conversation: { id: "test-conversation" } as XavierConversation, history: [], summary: null, retentionDays: 90, persist: false };
   }
   const user = await requireXavierUser(req);
   const profile = await getXavierProfile(user.id);
@@ -862,6 +863,7 @@ async function prepareAuthenticatedWebChat(req: IncomingMessage): Promise<Authen
   const memory = await loadXavierMemoryContext(conversation.id, profile.memory_enabled);
   return {
     userId: user.id,
+    plan: profile.plan || "individual",
     conversation,
     history: [...memorySummaryMessage(memory.summary), ...memory.history],
     summary: memory.summary,
@@ -954,9 +956,15 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
           requested_engine: requestedEngine,
           locale: normalizeSentimentLocale(authenticatedPayload.locale),
           reference_image_urls: referenceImageUrls,
+          plan: context.plan,
         },
       });
-      const reply = approvalPrompt(action);
+      const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
+        ? await executeApprovedXavierActionRequest(action)
+        : action;
+      const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
+        ? approvalPrompt(executedAction)
+        : actionReadyMessage(executedAction);
       if (context.persist) {
         await appendXavierMessage({
           userId: context.userId,
@@ -970,12 +978,13 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
         reply,
         tools_used: [],
         timings: [],
-        executor: "approval",
-        approval_required: true,
-        action_id: action.id,
-        action_kind: action.kind,
-        action_status: action.status,
-        approval_code: action.approval_code,
+        executor: executedAction.status === "pending_approval" ? "approval" : "credits",
+        approval_required: executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true,
+        action_id: executedAction.id,
+        action_kind: executedAction.kind,
+        action_status: executedAction.status,
+        approval_code: executedAction.status === "pending_approval" ? executedAction.approval_code : null,
+        attachments: executedAction.attachments || [],
       });
       return;
     }
@@ -1410,12 +1419,16 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
       conversationId: context.conversation.id,
       requestText: userMessage,
       intent: taskIntent,
-      metadata: { requested_engine: requestedEngine, locale, reference_image_urls: referenceImageUrls },
+      metadata: { requested_engine: requestedEngine, locale, reference_image_urls: referenceImageUrls, plan: context.plan },
     });
-    const reply = approvalPrompt(action);
+    const executedAction = action.status === "queued" ? await executeApprovedXavierActionRequest(action) : action;
+    const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
+      ? approvalPrompt(executedAction)
+      : actionReadyMessage(executedAction);
     if (context.persist) await appendXavierMessage({ userId: context.userId, conversationId: context.conversation.id, channel: "web", role: "assistant", content: reply });
     sseWrite(res, { type: "delta", text: reply });
-    sseWrite(res, { type: "done", reply, tools_used: [], executor: "approval", approval_required: true, action_id: action.id, action_kind: action.kind, action_status: action.status, approval_code: action.approval_code });
+    for (const attachment of executedAction.attachments || []) sseWrite(res, { type: "file", file_name: attachment.file_name, url: attachment.url, size_bytes: attachment.size_bytes });
+    sseWrite(res, { done: true, type: "done", reply, tools_used: [], executor: executedAction.status === "pending_approval" ? "approval" : "credits", approval_required: executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true, action_id: executedAction.id, action_kind: executedAction.kind, action_status: executedAction.status, approval_code: executedAction.status === "pending_approval" ? executedAction.approval_code : null, attachments: executedAction.attachments || [] });
     cleanup();
     try { res.end(); } catch {}
     return;

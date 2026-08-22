@@ -344,9 +344,14 @@ async function processPerUserTelegramMessage(input: {
         telegramChatId: chatId,
         requestText: text,
         intent: taskIntent,
-        metadata: { has_audio: Boolean(audio), bot_mode: "linked", reference_image_urls: referenceImageUrls },
+        metadata: { has_audio: Boolean(audio), bot_mode: "linked", reference_image_urls: referenceImageUrls, plan: profile.plan },
       });
-      const reply = approvalPrompt(action);
+      const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
+        ? await executeApprovedXavierActionRequest(action)
+        : action;
+      const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
+        ? approvalPrompt(executedAction)
+        : actionReadyMessage(executedAction);
       await appendXavierMessage({
         userId: connection.user_id,
         conversationId: conversation.id,
@@ -356,6 +361,7 @@ async function processPerUserTelegramMessage(input: {
         telegramMessageId: message.message_id,
       });
       await sendXavierTelegramMessage(connection, chatId, reply);
+      await sendLinkedActionAttachments(connection, chatId, executedAction.attachments || []);
       await sendLinkedVoiceReplyIfNeeded({ token: decryptXavierTelegramToken(connection), chatId, hasAudio: Boolean(audio), text: reply });
       return;
     }
@@ -701,9 +707,14 @@ async function processOfficialTelegramMessage(input: {
         telegramChatId: chatId,
         requestText: text,
         intent: taskIntent,
-        metadata: { has_audio: Boolean(audio), bot_mode: "official", locale, reference_image_urls: referenceImageUrls },
+        metadata: { has_audio: Boolean(audio), bot_mode: "official", locale, reference_image_urls: referenceImageUrls, plan: profile.plan },
       });
-      const reply = approvalPrompt(action);
+      const executedAction = action.status === "queued" && action.metadata.credit_blocked !== true
+        ? await executeApprovedXavierActionRequest(action)
+        : action;
+      const reply = executedAction.status === "pending_approval" && executedAction.metadata.credit_blocked !== true
+        ? approvalPrompt(executedAction)
+        : actionReadyMessage(executedAction);
       await appendXavierMessage({
         userId: link.user_id,
         conversationId: conversation.id,
@@ -713,6 +724,7 @@ async function processOfficialTelegramMessage(input: {
         telegramMessageId: message.message_id,
       });
       await sendOfficialTelegramText(chatId, reply);
+      await sendOfficialActionAttachments(chatId, executedAction.attachments || []);
       await sendOfficialVoiceReplyIfNeeded({ chatId, hasAudio: Boolean(audio), text: reply, locale });
       return;
     }

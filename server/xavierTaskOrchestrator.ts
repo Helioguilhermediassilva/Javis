@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { XavierPlan } from "./xavierEntitlements.js";
 import { applySupabaseAdminHeaders } from "./supabaseAdmin.js";
 import { executeXavierRunwayMediaAction, executeXavierVisualPresentationAction, isXavierRunwayConfigured } from "./xavierMedia.js";
+import { captureXavierCredits, creditBlockedMessage, creditLowBalanceMessage, releaseXavierCredits, reserveXavierCredits } from "./xavierCredits.js";
 
 const SUPABASE_URL = (process.env.SUPABASE_URL || "https://jfeqkgdimjhbwaqmzxpu.supabase.co").replace(/\/+$/, "");
 const ACTION_TABLE = "xavier_action_requests";
@@ -164,8 +166,11 @@ async function markActionFailed(action: XavierActionRequest, error: unknown): Pr
     completed_at: new Date().toISOString(),
   };
   try {
-    return await patchAction(action, patch);
+    const failed = await patchAction(action, patch);
+    await releaseXavierCredits(action);
+    return failed;
   } catch (persistError) {
+    await releaseXavierCredits(action);
     console.error("[xavier-actions] failed action persistence", { actionId: action.id, error: rawActionError(persistError) });
     return { ...action, ...patch, attachments: [], updated_at: new Date().toISOString() };
   }
@@ -192,12 +197,14 @@ export async function executeApprovedXavierActionRequest(action: XavierActionReq
       const result = action.kind === "presentation"
         ? await executeXavierVisualPresentationAction(running)
         : await executeXavierRunwayMediaAction(running);
-      return patchAction(running, {
+      const completed = await patchAction(running, {
         status: "completed",
         result_text: result.result_text,
         attachments: result.attachments,
         completed_at: new Date().toISOString(),
       });
+      await captureXavierCredits(completed);
+      return completed;
     }
     const response = await fetch(`${url}/v1/xavier/actions`, {
       method: "POST",
@@ -230,13 +237,16 @@ export async function executeApprovedXavierActionRequest(action: XavierActionReq
     const resultText = cleanText(payload.result_text, 12_000);
     const errorMessage = cleanText(payload.error_message, 2_000);
     const attachments = cleanAttachments(payload.attachments);
-    return patchAction(running, {
+    const updated = await patchAction(running, {
       status,
       result_text: resultText,
       error_message: errorMessage,
       attachments,
       ...(status === "completed" || status === "failed" ? { completed_at: new Date().toISOString() } : {}),
     });
+    if (status === "completed") await captureXavierCredits(updated);
+    if (status === "failed") await releaseXavierCredits(updated);
+    return updated;
   } catch (error) {
     return markActionFailed(running, error);
   }
@@ -330,7 +340,34 @@ export async function createXavierActionRequest(input: {
   });
   const rows = await readRows<XavierActionRequest>(response, "action insert");
   if (!rows[0]) throw new Error("A solicitação do Xavier não foi persistida");
-  return { ...rows[0], metadata: cleanJsonObject(rows[0].metadata), attachments: cleanAttachments(rows[0].attachments) };
+  const action = { ...rows[0], metadata: cleanJsonObject(rows[0].metadata), attachments: cleanAttachments(rows[0].attachments) };
+  // Toda tarefa que gera ou transforma um artefato consome a franquia. A aprovação
+  // explícita continua reservada para ações externas quando os créditos automáticos
+  // estão desativados ou quando a tarefa ultrapassa o saldo disponível.
+  const creditDecision = await reserveXavierCredits({ action, plan: input.metadata?.plan as XavierPlan | undefined });
+  if (!creditDecision.enabled) return action;
+  if (!creditDecision.ok) {
+    return patchAction(action, {
+      metadata: {
+        ...action.metadata,
+        credit_blocked: true,
+        credit_required_units: creditDecision.requiredUnits,
+        credit_available_units: creditDecision.availableUnits,
+      },
+    });
+  }
+  return patchAction(action, {
+    status: "queued",
+    approved_at: new Date().toISOString(),
+    metadata: {
+      ...action.metadata,
+      credit_reserved_units: creditDecision.reservation?.requiredUnits || creditDecision.requiredUnits,
+      credit_available_after: creditDecision.reservation?.availableUnits || 0,
+      credit_low_balance: creditDecision.reservation?.lowBalance || false,
+      credit_reservation_id: creditDecision.reservation?.reservationId || null,
+      credit_auto_approved: true,
+    },
+  });
 }
 
 const ACTION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -391,10 +428,12 @@ export async function getXavierActionRequest(userId: string, actionId: string): 
 }
 
 export function actionReadyMessage(action: XavierActionRequest): string {
+  if (action.metadata.credit_blocked === true) return creditBlockedMessage(action);
   if (action.status === "completed") {
-    return action.result_text?.trim()
+    const base = action.result_text?.trim()
       ? `A solicitação “${action.title}” foi concluída.\n\n${action.result_text.trim()}`
       : `A solicitação “${action.title}” foi concluída e os arquivos estão disponíveis nesta sessão.`;
+    return `${base}${creditLowBalanceMessage(action)}`;
   }
   if (action.status === "failed") {
     return `Não foi possível concluir “${action.title}” nesta tentativa. Nenhuma nova autorização foi concedida. ${action.error_message || "O provedor autorizado não respondeu."}`;
