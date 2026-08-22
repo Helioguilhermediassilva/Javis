@@ -100,6 +100,8 @@ describe("handleJarvisChatStream (SSE)", () => {
   const origFetch = globalThis.fetch;
   const origLlmBase = process.env.LLM_API_URL;
   const origLlmKey = process.env.LLM_API_KEY;
+  const origCerebrasKey = process.env.CEREBRAS_API_KEY;
+  const origCerebrasEnabled = process.env.CEREBRAS_FAST_PATH_ENABLED;
 
   beforeEach(() => {
     process.env.LLM_API_URL = "https://example-llm.local";
@@ -110,6 +112,10 @@ describe("handleJarvisChatStream (SSE)", () => {
     globalThis.fetch = origFetch;
     process.env.LLM_API_URL = origLlmBase;
     process.env.LLM_API_KEY = origLlmKey;
+    if (origCerebrasKey === undefined) delete process.env.CEREBRAS_API_KEY;
+    else process.env.CEREBRAS_API_KEY = origCerebrasKey;
+    if (origCerebrasEnabled === undefined) delete process.env.CEREBRAS_FAST_PATH_ENABLED;
+    else process.env.CEREBRAS_FAST_PATH_ENABLED = origCerebrasEnabled;
     vi.restoreAllMocks();
   });
 
@@ -139,6 +145,36 @@ describe("handleJarvisChatStream (SSE)", () => {
     // Sem tools chamadas
     const done = events[2] as { tools_used?: string[] };
     expect(done.tools_used).toEqual([]);
+  });
+
+  it("usa Cerebras para mensagem simples e mantém o contrato SSE sem chamar o gateway legado", async () => {
+    process.env.CEREBRAS_API_KEY = "csk-test";
+    process.env.CEREBRAS_FAST_PATH_ENABLED = "true";
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      expect(url).toBe("https://api.cerebras.ai/v1/chat/completions");
+      return new Response(JSON.stringify({
+        model: "gpt-oss-120b",
+        choices: [{ message: { content: "Estou bem, senhor." } }],
+        usage: { prompt_tokens: 8, completion_tokens: 5, total_tokens: 13 },
+      }), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const req = makeReq({ userMessage: "Tudo bem?" });
+    const res = makeRes();
+    await handleJarvisChatStream(
+      req as unknown as Parameters<typeof handleJarvisChatStream>[0],
+      res as unknown as Parameters<typeof handleJarvisChatStream>[1],
+    );
+
+    const events = parseSseEvents(res.chunks.join(""));
+    expect(res.statusCode).toBe(200);
+    expect(events).toEqual([
+      { type: "delta", text: "Estou bem, senhor." },
+      { type: "done", reply: "Estou bem, senhor.", tools_used: [], model: "gpt-oss-120b", executor: "cerebras", attachments: [] },
+    ]);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("acumula tool_calls fragmentados, executa a tool e emite tool_start/tool_end", async () => {

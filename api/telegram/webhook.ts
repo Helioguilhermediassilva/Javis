@@ -10,6 +10,7 @@ import {
 import { appendTelegramMessage, loadTelegramHistory } from "../../server/telegramHistory.js";
 import { generateJarvisReply } from "../../server/jarvisProxy.js";
 import { isOpenRouterConfigured } from "../../server/xavierOpenRouter.js";
+import { generateCerebrasReply, isCerebrasConfigured, shouldUseCerebrasFastPath } from "../../server/xavierCerebras.js";
 import { downloadTelegramImage, extractTelegramAudioReference, extractTelegramImageReference, transcribeTelegramAudio, type TelegramImageReference } from "../../server/telegramAudio.js";
 import { createXavierTransientPdfArtifact } from "../../server/xavierPdf.js";
 import { createXavierTransientPresentationArtifact } from "../../server/xavierPresentation.js";
@@ -342,6 +343,7 @@ async function processPerUserTelegramMessage(input: {
       return;
     }
     const profile = await getXavierProfile(connection.user_id);
+    const locale = "pt" as const;
     const allowed = await consumeXavierMessageQuota(connection.user_id, profile.monthly_message_limit);
     if (!allowed) {
       await sendXavierTelegramMessage(connection, chatId, "Senhor, o limite mensal desta conta foi atingido. Ajuste-o no painel web para continuar.");
@@ -455,8 +457,8 @@ async function processPerUserTelegramMessage(input: {
       return;
     }
 
-    if (!isClaudeConfigured() && !isOpenRouterConfigured()) {
-      await sendXavierTelegramMessage(connection, chatId, "Senhor, nenhum executor de IA está configurado no servidor. A equipe deve configurar OPENROUTER_API_KEY ou ANTHROPIC_API_KEY no Vercel.");
+    if (!isClaudeConfigured() && !isOpenRouterConfigured() && !isCerebrasConfigured()) {
+      await sendXavierTelegramMessage(connection, chatId, "Senhor, nenhum executor de IA está configurado no servidor. A equipe deve configurar CEREBRAS_API_KEY, OPENROUTER_API_KEY ou ANTHROPIC_API_KEY no Vercel.");
       return;
     }
 
@@ -545,8 +547,28 @@ async function processPerUserTelegramMessage(input: {
     }
 
     const researchRequested = shouldUseWebSearchForRequest(text);
-    let reply: string;
-    if (researchRequested || !isOpenRouterConfigured()) {
+    let reply = "";
+    const useCerebrasFastPath = shouldUseCerebrasFastPath({
+      engine: "auto",
+      userMessage: text,
+      history: previousHistory,
+      hasAudio: Boolean(audio),
+    });
+    if (useCerebrasFastPath && isCerebrasConfigured()) {
+      try {
+        const result = await generateCerebrasReply({
+          history: previousHistory,
+          systemPrompt: `${XAVIER_CLAUDE_SYSTEM_PROMPT}\n\nIdioma da sessão: ${locale}.`,
+          userMessage: text,
+          maxCompletionTokens: 512,
+          timeoutMs: 20_000,
+        });
+        reply = result.content;
+      } catch (error) {
+        console.warn("[telegram:xavier] Cerebras fast path failed; falling back", (error as Error).message.slice(0, 240));
+      }
+    }
+    if (!reply && (researchRequested || !isOpenRouterConfigured())) {
       const result = await generateClaudeReply({
         history: previousHistory,
         systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
@@ -555,11 +577,12 @@ async function processPerUserTelegramMessage(input: {
         timeoutMs: claudeTimeoutMs,
       });
       reply = appendClaudeCitations(result.reply, result.citations);
-    } else {
+    } else if (!reply) {
       const result = await generateJarvisReply({
         history: previousHistory,
         userMessage: text,
         engine: "openrouter",
+        locale,
       });
       reply = result.reply;
     }
@@ -835,7 +858,7 @@ async function processOfficialTelegramMessage(input: {
       return;
     }
 
-    if (!isClaudeConfigured() && !isOpenRouterConfigured()) {
+    if (!isClaudeConfigured() && !isOpenRouterConfigured() && !isCerebrasConfigured()) {
       await sendOfficialTelegramText(chatId, officialTelegramText(locale, "claudeUnavailable"));
       return;
     }
@@ -934,8 +957,28 @@ async function processOfficialTelegramMessage(input: {
       return;
     }
 
-    let reply: string;
-    if (researchRequested || !isOpenRouterConfigured()) {
+    let reply = "";
+    const useCerebrasFastPath = shouldUseCerebrasFastPath({
+      engine: "auto",
+      userMessage: text,
+      history: previousHistory,
+      hasAudio: Boolean(audio),
+    });
+    if (useCerebrasFastPath && isCerebrasConfigured()) {
+      try {
+        const result = await generateCerebrasReply({
+          history: previousHistory,
+          systemPrompt: `${XAVIER_CLAUDE_SYSTEM_PROMPT}\n\nIdioma da sessão: ${locale}.`,
+          userMessage: text,
+          maxCompletionTokens: 512,
+          timeoutMs: 20_000,
+        });
+        reply = result.content;
+      } catch (error) {
+        console.warn("[telegram:official] Cerebras fast path failed; falling back", (error as Error).message.slice(0, 240));
+      }
+    }
+    if (!reply && (researchRequested || !isOpenRouterConfigured())) {
       const result = await generateClaudeReply({
         history: previousHistory,
         systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
@@ -944,7 +987,7 @@ async function processOfficialTelegramMessage(input: {
         timeoutMs: claudeTimeoutMs,
       });
       reply = appendClaudeCitations(result.reply, result.citations);
-    } else {
+    } else if (!reply) {
       const result = await generateJarvisReply({
         history: previousHistory,
         userMessage: text,
@@ -1112,8 +1155,8 @@ async function processLegacyTelegramMessage(input: {
       telegramUpdateId: update.update_id,
     });
     if (!inserted) return;
-    if (!isClaudeConfigured()) {
-      await sendLegacyTelegramText(chatId, "Senhor, o Claude ainda não está configurado no servidor. Configure ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
+    if (!isClaudeConfigured() && !isCerebrasConfigured()) {
+      await sendLegacyTelegramText(chatId, "Senhor, nenhum executor de IA está configurado no servidor. Configure CEREBRAS_API_KEY ou ANTHROPIC_API_KEY no Vercel e faça um novo deploy.");
       return;
     }
 
@@ -1168,14 +1211,41 @@ async function processLegacyTelegramMessage(input: {
       return;
     }
 
-    const result = await generateClaudeReply({
-      history: previousHistory,
-      systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+    let reply = "";
+    const useCerebrasFastPath = shouldUseCerebrasFastPath({
+      engine: "auto",
       userMessage: text,
-      useWebSearch: researchRequested,
-      timeoutMs: claudeTimeoutMs,
+      history: previousHistory,
+      hasAudio: Boolean(audio),
     });
-    const reply = appendClaudeCitations(result.reply, result.citations);
+    if (useCerebrasFastPath && isCerebrasConfigured()) {
+      try {
+        const result = await generateCerebrasReply({
+          history: previousHistory,
+          systemPrompt: `${XAVIER_CLAUDE_SYSTEM_PROMPT}\n\nIdioma da sessão: pt.`,
+          userMessage: text,
+          maxCompletionTokens: 512,
+          timeoutMs: 20_000,
+        });
+        reply = result.content;
+      } catch (error) {
+        console.warn("[telegram:legacy] Cerebras fast path failed; falling back", (error as Error).message.slice(0, 240));
+      }
+    }
+    if (!reply) {
+      if (!isClaudeConfigured()) {
+        await sendLegacyTelegramText(chatId, "Senhor, esta solicitação exige o executor profundo Claude, que não está configurado no servidor.");
+        return;
+      }
+      const result = await generateClaudeReply({
+        history: previousHistory,
+        systemPrompt: XAVIER_CLAUDE_SYSTEM_PROMPT,
+        userMessage: text,
+        useWebSearch: researchRequested,
+        timeoutMs: claudeTimeoutMs,
+      });
+      reply = appendClaudeCitations(result.reply, result.citations);
+    }
     await appendTelegramMessage({
       chatId,
       telegramUserId: message.from?.id,

@@ -21,6 +21,7 @@ import {
   type XavierConversation,
 } from "./xavierMemory.js";
 import { isDocumentTaskRequest, isImageTaskRequest, isPdfTaskRequest, isPresentationTaskRequest, isSpreadsheetTaskRequest, isVideoTaskRequest } from "./xavierArtifacts.js";
+import { generateCerebrasReply, isCerebrasConfigured, shouldUseCerebrasFastPath } from "./xavierCerebras.js";
 import {
   appendClaudeCitations,
   generateClaudeReply,
@@ -571,14 +572,11 @@ export interface JarvisChatResult {
   reply: string;
   tools_used: string[];
   timings: Array<{ round: number; llmMs: number; toolsMs: number; toolNames: string[] }>;
-  provider?: "openrouter" | "legacy";
+  provider?: "cerebras" | "openrouter" | "legacy";
   model?: string;
 }
 
 export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisChatResult> {
-  const route = getXavierLlmRoute();
-  if (!route) throw new JarvisChatError(500, "Nenhum executor configurado no servidor. Configure OPENROUTER_API_KEY ou o gateway LLM legado.");
-
   const userMessage = (payload.userMessage || "").toString().slice(0, 4000);
   const history = Array.isArray(payload.history) ? payload.history : [];
   const attachments = Array.isArray(payload.attachments) ? payload.attachments.slice(0, 4) : [];
@@ -588,6 +586,36 @@ export async function generateJarvisReply(payload: ChatPayload): Promise<JarvisC
   if (!userMessage.trim() && attachments.length === 0) {
     throw new JarvisChatError(400, "userMessage or attachments required");
   }
+
+  const useCerebrasFastPath = shouldUseCerebrasFastPath({
+    engine: payload.engine,
+    userMessage,
+    history,
+    attachments,
+  });
+  if (useCerebrasFastPath && isCerebrasConfigured()) {
+    try {
+      const result = await generateCerebrasReply({
+        history,
+        systemPrompt: `${localizedSystemPrompt(locale)}${honorificMsg ? `\n\n${honorificMsg.content}` : ""}`,
+        userMessage,
+        maxCompletionTokens: 512,
+        timeoutMs: 20_000,
+      });
+      return {
+        reply: result.content,
+        tools_used: [],
+        timings: [],
+        provider: result.provider,
+        model: result.model,
+      };
+    } catch (error) {
+      console.warn("[xavier:cerebras] reply fast path failed; falling back", (error as Error).message.slice(0, 240));
+    }
+  }
+
+  const route = getXavierLlmRoute();
+  if (!route) throw new JarvisChatError(500, "Nenhum executor configurado no servidor. Configure CEREBRAS_API_KEY, OPENROUTER_API_KEY ou o gateway LLM legado.");
 
   const cleanedHistory = normalizeChatHistory(history);
 
@@ -1027,9 +1055,66 @@ export async function handleJarvisChat(req: IncomingMessage, res: ServerResponse
     }
     const activeFile = await resolveActiveXavierFile(authenticatedPayload, context);
     const fileEditRequested = Boolean(activeFile && isFileEditRequest(authenticatedPayload.userMessage || "", true));
-    const claudeTask = fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine)));
+    const locale = normalizeSentimentLocale(authenticatedPayload.locale);
+    const honorificMsg = honorificSystemMessage(authenticatedPayload.honorific);
+    const useCerebrasFastPath = shouldUseCerebrasFastPath({
+      engine: requestedEngine,
+      userMessage: authenticatedPayload.userMessage || "",
+      history: context.history,
+      attachments: authenticatedPayload.attachments,
+      hasActiveFile: fileEditRequested,
+    });
+    const claudeTask = !useCerebrasFastPath && (fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(authenticatedPayload.userMessage || "", requestedEngine))));
     if (claudeTask && (requestedEngine === "claude" || requestedEngine === "manus") && !isClaudeConfigured()) {
       throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
+    }
+    if (useCerebrasFastPath && isCerebrasConfigured()) {
+      try {
+        const result = await generateCerebrasReply({
+          history: context.history,
+          systemPrompt: `${localizedSystemPrompt(locale)}${honorificMsg ? `\n\n${honorificMsg.content}` : ""}`,
+          userMessage: authenticatedPayload.userMessage || "",
+          maxCompletionTokens: 512,
+          timeoutMs: 20_000,
+        });
+        const reply = result.content;
+        if (context.persist) {
+          await appendXavierMessage({
+            userId: context.userId,
+            conversationId: context.conversation.id,
+            channel: "web",
+            role: "assistant",
+            content: reply,
+          });
+          await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+            console.warn("[xavier-memory] Cerebras maintenance failed", (error as Error).message);
+          });
+        }
+        recordXavierUsageEventDetached({
+          userId: telemetryUserId,
+          requestId,
+          channel: "web",
+          eventName: "chat_response",
+          status: "success",
+          provider: result.provider,
+          model: result.model,
+          latencyMs: Date.now() - startedAt,
+          inputTokens: result.usage?.prompt_tokens,
+          outputTokens: result.usage?.completion_tokens,
+          metadata: { route: "chat_json", executor: "cerebras", tools: 0 },
+        });
+        sendJson(res, 200, {
+          reply,
+          tools_used: [],
+          timings: [],
+          model: result.model,
+          executor: result.provider,
+          attachments: [],
+        });
+        return;
+      } catch (error) {
+        console.warn("[xavier:cerebras] fast path failed; falling back", (error as Error).message.slice(0, 240));
+      }
     }
     if (context.persist && isPresentationTaskRequest(authenticatedPayload.userMessage || "") && !fileEditRequested) {
       const localAction = await createLocalArtifactAction({ context, requestId, requestText: authenticatedPayload.userMessage || "", kind: "presentation" });
@@ -1514,7 +1599,59 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
     try { res.end(); } catch {}
     return;
   }
-  const claudeTask = fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(userMessage, requestedEngine)));
+  const useCerebrasFastPath = shouldUseCerebrasFastPath({
+    engine: requestedEngine,
+    userMessage,
+    history,
+    attachments,
+    hasAudio: false,
+    hasActiveFile: fileEditRequested,
+  });
+  const claudeTask = !useCerebrasFastPath && (fileEditRequested || (requestedEngine !== "grok" && requestedEngine !== "openrouter" && (isClaudeConfigured() || shouldUseClaudeTask(userMessage, requestedEngine))));
+  if (useCerebrasFastPath && isCerebrasConfigured()) {
+    try {
+      const result = await generateCerebrasReply({
+        history,
+        systemPrompt: `${localizedSystemPrompt(locale)}${honorificMsg ? `\n\n${honorificMsg.content}` : ""}`,
+        userMessage,
+        maxCompletionTokens: 512,
+        timeoutMs: 20_000,
+      });
+      const reply = result.content;
+      if (context.persist) {
+        await appendXavierMessage({
+          userId: context.userId,
+          conversationId: context.conversation.id,
+          channel: "web",
+          role: "assistant",
+          content: reply,
+        });
+        await maybeCompactXavierConversation(context.userId, context.conversation.id, context.retentionDays).catch((error) => {
+          console.warn("[xavier-memory] Cerebras stream maintenance failed", (error as Error).message);
+        });
+      }
+      recordXavierUsageEventDetached({
+        userId: context.persist ? context.userId : null,
+        requestId,
+        channel: "web",
+        eventName: "chat_response",
+        status: "success",
+        provider: result.provider,
+        model: result.model,
+        latencyMs: Date.now() - startedAt,
+        inputTokens: result.usage?.prompt_tokens,
+        outputTokens: result.usage?.completion_tokens,
+        metadata: { route: "chat_stream", executor: "cerebras", tools: 0 },
+      });
+      sseWrite(res, { type: "delta", text: reply });
+      sseWrite(res, { type: "done", reply, tools_used: [], model: result.model, executor: result.provider, attachments: [] });
+      cleanup();
+      try { res.end(); } catch {}
+      return;
+    } catch (error) {
+      console.warn("[xavier:cerebras] stream fast path failed; falling back", (error as Error).message.slice(0, 240));
+    }
+  }
   if (claudeTask && (isClaudeConfigured() || requestedEngine === "claude" || requestedEngine === "manus")) {
     try {
       if (!isClaudeConfigured()) throw new JarvisChatError(500, "Claude não configurado no servidor. Adicione ANTHROPIC_API_KEY no Vercel.");
@@ -1719,7 +1856,7 @@ export async function handleJarvisChatStream(req: IncomingMessage, res: ServerRe
   }
 
   if (!llmRoute) {
-    sseWrite(res, { type: "error", message: "Nenhum executor configurado no servidor. Configure OPENROUTER_API_KEY ou o gateway LLM legado." });
+    sseWrite(res, { type: "error", message: "Nenhum executor configurado no servidor. Configure CEREBRAS_API_KEY, OPENROUTER_API_KEY ou o gateway LLM legado." });
     cleanup();
     try { res.end(); } catch {}
     return;
